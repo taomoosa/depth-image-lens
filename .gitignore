@@ -218,3 +218,24 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local editable verification environments; historical ZIPs are not source.
+.venv-*/
+# dist/ is already ignored above.
+
+# Private records and experimental inputs are not publication artifacts.
+/MANIFEST.json
+/logs/
+/receipts/
+/datasets/
+/data/
+/rawresearch/
+/archives/
+*.zip
+*.tar
+*.tar.gz
+*.npy
+*.npz
+*.pcd
+*.log
+.env.*
