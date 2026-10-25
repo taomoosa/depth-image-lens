@@ -59,6 +59,28 @@ class CornerResult:
     def to_dict(self):
         return {'candidates':self.candidates, 'summary':self.summary}
 
+    def render_debug(self, color, *, color_order, mask_alpha=.2,
+                     show_contours=True, max_labels=12, panel=True):
+        """Return a new uint8 overlay in the declared RGB/BGR order.
+
+        The source remains at the top-left in its original pixel coordinates.
+        A legend/details panel extends the canvas by default. No files are written.
+        """
+        from .corner_debug import render_corner_debug
+        return render_corner_debug(self, color, color_order=color_order,
+            mask_alpha=mask_alpha, show_contours=show_contours,
+            max_labels=max_labels, panel=panel)
+
+    def save_debug(self, path, color, *, color_order, overwrite=False, **render_options):
+        """Save a lossless PNG explicitly; existing paths are refused by default.
+
+        The parent directory must already exist. Returns the destination Path.
+        Detection never saves files implicitly.
+        """
+        from .corner_debug import save_corner_debug
+        return save_corner_debug(self, path, color, color_order=color_order,
+            overwrite=overwrite, **render_options)
+
 
 class OverheadCornerDetector:
     """Local near-right-angle contour candidates in an approximately overhead view.

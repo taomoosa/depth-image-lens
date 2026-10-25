@@ -321,3 +321,63 @@ renormalized into apparent certainty. Weights, normalization, required features
 and missing-data behavior need a separate design and real-data validation.
 This change exposes tuning and diagnostic evidence only; no new weighted
 classifier is implemented, and no grasp/overlap correctness is guaranteed.
+
+## Render and save debug images
+
+Rendering is part of the public `CornerResult` API. It does not rerun detection,
+change candidates or modify the supplied color/result. OpenCV is the existing
+optional Corner dependency; no display server is needed.
+
+```python
+result = detector.detect(color, depth, color_order="RGB", registered_to_depth=True,
+                         object_mask=object_mask, depth_scale_m=.001, diagnostics=True)
+image = result.render_debug(color, color_order="RGB", max_labels=12)
+# image is a new uint8 RGB array. A details panel extends its dimensions.
+result.save_debug("corner-debug.png", color, color_order="RGB")
+```
+
+`render_debug(color, *, color_order, mask_alpha=.2, show_contours=True,
+max_labels=12, panel=True)` returns the **same RGB/BGR order explicitly supplied**.
+Color must be uint8 HxWx3 matching `result.object_mask` and the original crop/pixel
+frame. No resizing or registration is inferred. The source occupies the top-left
+of the canvas with unchanged pixel coordinates. `panel=False` returns source-sized
+pixels and omits the legend/details/warning text; `max_labels=0` suppresses IDs and
+candidate detail rows while retaining all in-frame candidate markers. The maximum
+label/detail count is 100. Alpha controls cyan mask blending; recorded contours
+can be hidden separately. Accepted is green, suspected red, unknown amber; these
+colors do not imply physical grasp safety.
+
+The default panel shows the legend, zero-based `result.candidates` IDs, status,
+position, available angle/line-residual/depth-residual measurements, reasons and
+warnings. Missing measurements are omitted. If `diagnostics=False` was used,
+known candidates and the returned object mask still render, with a message that
+recorded contours are unavailable. The renderer does not reconstruct filtered
+small contours, pre-proposal vertices or deduplicated candidates absent from the
+result. Empty candidates do not prove absence of physical corners. Off-image or
+unavailable positions are reported but not drawn as invented in-frame points.
+
+`save_debug(path, color, *, color_order, overwrite=False, **render_options)` saves
+lossless PNG and returns its `Path`. Only `.png` is supported. The parent directory
+must already exist and must not itself be a symlink; use a trusted output directory.
+Existing files or symlinks raise `FileExistsError` by default. `overwrite=True`
+atomically replaces that directory entry without following its old symlink target.
+Filesystem/encoding errors propagate clearly. `detect()` and `render_debug()`
+never write files. The PNG encoder handles RGB/BGR correctly; callers using
+`cv2.imwrite` on a returned RGB array must convert it to BGR themselves.
+
+Run `python examples/example_corner_debug.py` for memory-only rendering, or
+`python examples/example_corner_debug.py --output corner-debug.png` to explicitly
+save. Detailed evaluation galleries remain external to the public repository.
+
+### Optional mask calculation
+
+Pass exactly one of `object_mask` or `background_color`. With `background_color`,
+the mask is `norm(color.astype(float)-background_color.astype(float), axis=2) >
+color_distance` (default 35 in raw 0–255 color-channel units). Both color images
+must be same-shape uint8 in the declared RGB/BGR order. This path has no smoothing,
+morphology, learned semantics or depth-based foreground extraction. Component
+labeling and minimum contour-area filtering follow during corner detection; they
+do not turn foreground into semantic object identity. Hand/arm motion, shadows,
+lighting changes and camera movement can all enter this foreground mask. Use a
+registered fixed-camera empty scene with stable illumination, or supply a better
+external object mask. Depth validity remains separate from the silhouette.

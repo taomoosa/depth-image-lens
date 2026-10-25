@@ -267,3 +267,8 @@ difference or a calibrated table plane. A missing reference remains unknown.
 These are configurable shape rules, not physical grasp verification; existing
 `IndependentGraspDetector` behavior is unchanged. See [OBJECT_GRASP.md](OBJECT_GRASP.md)
 and `python examples/example_object_grasp.py`.
+
+Corner results also provide `result.render_debug(color, color_order="RGB")` and
+explicit `result.save_debug("corner-debug.png", color, color_order="RGB")`.
+See [Corner rendering and input contracts](CORNER.md#render-and-save-debug-images)
+and `examples/example_corner_debug.py`. Detection itself never writes files.
