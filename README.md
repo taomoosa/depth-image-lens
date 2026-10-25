@@ -255,3 +255,15 @@ intersection shift, minimum support and internal-step/boundary thresholds are
 listed in [CORNER.md](CORNER.md#explicit-recommended-starting-preset). This is a
 starting point for real-data tuning, not a calibrated confidence score or a
 measurement of table-relative height or usable grasp area.
+
+
+## Object-only inferred holding
+
+`ObjectOnlyGraspDetector` needs no visible hands: under an explicit static
+suspension rule, sufficient reference elevation implies inferred holding and
+sufficient same-component visible width implies inferred bilateral support.
+Use a selected object mask plus current depth and either an empty-background
+difference or a calibrated table plane. A missing reference remains unknown.
+These are configurable shape rules, not physical grasp verification; existing
+`IndependentGraspDetector` behavior is unchanged. See [OBJECT_GRASP.md](OBJECT_GRASP.md)
+and `python examples/example_object_grasp.py`.

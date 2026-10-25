@@ -28,3 +28,7 @@ __all__ += ["analyze_color_geometry"]
 from .grasp import IndependentGraspDetector, GraspResult
 
 __all__ += ["IndependentGraspDetector", "GraspResult"]
+
+from .object_grasp import ObjectOnlyGraspDetector, ObjectOnlyGraspResult
+
+__all__ += ["ObjectOnlyGraspDetector", "ObjectOnlyGraspResult"]
