@@ -69,8 +69,8 @@ Default provisional parameters (tune on actual sensor/task data):
 | `min_lift_m` | .03 | Minimum reference separation after error allowance |
 | `reference_error_m` | .005 | Caller-assumed reference error, not estimated guarantee |
 | `min_pixels` | 20 | Minimum pixels in one elevated connected region |
-| `min_lift_fraction` | .1 | Minimum size of that region / valid selected pixels |
-| `min_valid_fraction` | .7 | Minimum reference coverage within the selected mask |
+| `min_lift_fraction` | .1 | Minimum elevated component size / valid pixels in its observation region |
+| `min_valid_fraction` | .7 | Minimum reference coverage within its mask-connected observation region |
 | `depth_jump_m` | .1 | Maximum adjacent raw Z jump within a region |
 | `min_width_px` | 40 | Minimum contiguous horizontal run width |
 | `min_width_rows` | 3 | Consecutive rows supporting that width in the same region |
@@ -79,8 +79,17 @@ Connectivity uses four neighbors and actual observed elevated pixels. No holes,
 exclusions or missing values are filled. An excessive adjacent depth jump cuts
 that transition. Width is the widest horizontal run that is supported across the
 configured consecutive rows, not a bounding box or the sum of separate islands.
-Multiple qualifying components are reported separately; a bilateral claim must
-be supported by one component alone. The chosen component ID is recorded.
+Observation regions are four-connected components of the supplied object mask,
+including their invalid/missing pixels. Coverage and elevated-component fraction
+are evaluated within each observation region, so a separate missing or resting
+region cannot veto a supported local positive. Within one mask-connected region,
+missing pixels stay in the coverage denominator: the detector does not know
+whether a connected missing extension is unrelated. This deliberately retains
+uncertainty for mostly missing connected regions. Valid depth discontinuities
+still split elevated components; this does not combine their areas or widths.
+One eligible elevated component is sufficient for `held`; `bilateral` additionally
+requires that same component's sustained width. Multiple qualifying components
+are reported separately; a bilateral claim must be supported by one component alone. The chosen component ID is recorded.
 Width is in processing **pixels along image x**, not physical length or a detected
 support span. Align the image's lateral direction appropriately and scale pixel
 parameters with resolution (areas quadratically). Large camera roll, perspective,
@@ -96,11 +105,17 @@ It means **not sufficiently elevated under this rule**, not mechanically ungrasp
 an object held while resting on a table can satisfy it. Difference-only zeros or
 an empty object mask never produce a negative claim.
 
-`metrics` includes reference type, counts/coverage, separation quantiles, component
-areas, width measurements and chosen ID. `thresholds`, `reason`, `bilateral_reason`
-and `warnings` explain decisions. Metrics remain available if insufficient
+`metrics` includes reference type, global counts/coverage and separation
+quantiles, `observation_regions` with local coverage, and elevated `components`
+with parent region ID, local lift fraction, eligibility and failure reasons.
+Global coverage remains reported even when a valid local region establishes a
+positive. Multiple regions do not establish object identity; a warning marks
+that ambiguity. These are visible-region existence inferences, not whole-object
+confidence. Negative rules still require the entire selected object to be valid.
+Width measurements and the chosen component ID remain available. `thresholds`, `reason`, `bilateral_reason`
+and `warnings` explain decisions. Metrics remain available if insufficient local
 coverage prevents a claim. With `diagnostics=True`, `valid_reference_mask`,
-`elevated_mask` and `component_labels` are returned separately. `to_dict()` omits
+`elevated_mask`, `component_labels` and `observation_region_labels` are returned separately. `to_dict()` omits
 arrays and supports strict JSON. `validation_status` remains `not_validated`.
 
 Run `python examples/example_object_grasp.py`. Regression scenes are synthetic,

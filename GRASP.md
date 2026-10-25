@@ -48,13 +48,26 @@ contact distance. Pixel radius must be chosen for the processing resolution.
 A likely result requires at least `min_contact_pixels=3` in a four-connected
 consistent boundary region on **both** masks within the same corresponding
 contact region, plus consistent evidence on at
-least `min_consistent_fraction=.6` of near hand pixels with depth. One matching
+least `min_consistent_fraction=.6` of near hand pixels with depth **within one
+corresponding contact patch**. One matching
 object pixel or disconnected speckles cannot meet the default support rule.
 Matched depth-consistent pairs are partitioned by their hand/object four-neighbor
 components, repeating within subsets until both endpoint sets are contiguous.
 Support from unrelated regions is never combined to pass the two-sided minimum.
 `corresponding_contact_regions` records each paired region and its support; the
 separate largest-component fields remain raw measurements, not a joint proof.
+Contact patches are partitioned from all nearest boundary pairs before depth
+validity/consistency filtering. Missing and inconsistent neighbors in the same
+patch remain visible in its measurements. Each patch must independently have a
+sufficient connected matched region and consistent fraction; disconnected small
+supports cannot be pooled. One qualifying patch is enough for the side's local
+positive inference. A separate inconsistent or missing patch cannot dilute it.
+A continuous mixed patch still uses its full valid evidence: it is not split by
+depth agreement merely to force a positive. Global consistent fraction and
+coverage remain diagnostics, not a veto on another qualifying patch.
+`depth_consistency.contact_patches` records patch IDs, bounding boxes, support,
+coverage, consistent fraction, positive status and failure reason. Patch IDs are
+per-call geometry identifiers, not tracked hands or physical contacts.
 Partial visibility and missing depth elsewhere do not veto a supported local
 hypothesis. Measurements and warnings remain available even if a rule fails.
 
@@ -89,3 +102,15 @@ Run `python examples/example_grasp.py` for a small generated example, and
 `python -m unittest tests.test_grasp -v` for focused regressions. These tests cover
 explicit geometry contracts; they do not establish field accuracy. Real-data
 annotations, evaluation scripts and galleries remain outside this MIT repository.
+
+## Tuning local versus global evidence
+
+All five thresholds are constructor arguments. `contact_radius_px` is an integer
+from 1 to 8; other support and fraction constraints are validated at construction.
+Inspect registration/masks and processing resolution first, then image radius,
+metric depth tolerance, local connected support and local consistent fraction.
+`min_valid_fraction` remains the coverage gate for depth-based negative inference;
+it does not discard a sufficient observed local positive patch. Whole-side
+quality warnings remain present with a local positive. Negative completeness and
+visibility rules are unchanged. Do not interpret a local positive as whole-object
+coverage or verified physical holding.

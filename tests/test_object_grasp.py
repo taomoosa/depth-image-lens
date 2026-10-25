@@ -101,3 +101,61 @@ class ObjectOnlyTests(unittest.TestCase):
         self.assertEqual(self.detect(z,m,d,observed_mask=observed).held,'unknown')
         d[:]=0;d[15,25]=.1
         self.assertEqual(self.detect(z,m,d).held,'unknown')
+
+
+class LocalObservationRegionTests(unittest.TestCase):
+    def scene(self, bad_value=0):
+        z=np.ones((60,120));m=np.zeros(z.shape,bool);m[5:15,5:55]=True
+        m[25:55,60:110]=True;z[25:55,60:110]=bad_value
+        return z,m,np.full(z.shape,.1)
+
+    def detect(self,z,m,d,**kw):
+        return ObjectOnlyGraspDetector().detect(z,m,depth_unit='m',difference=d,diagnostics=True,**kw)
+
+    def test_unrelated_missing_region_preserves_positive(self):
+        for value in (0,np.nan,np.inf):
+            r=self.detect(*self.scene(value))
+            self.assertEqual((r.held,r.bilateral),('held','bilateral'))
+            self.assertEqual(r.metrics['valid_fraction'],.25)
+            self.assertEqual(r.metrics['visible_width_px'],50)
+            self.assertEqual([x['valid_fraction'] for x in r.metrics['observation_regions']],[1.,0.])
+            self.assertIn('local_positive_with_low_global_reference_coverage',r.warnings)
+            self.assertEqual(r.physical_grasp,'unknown');json.dumps(r.to_dict(),allow_nan=False)
+
+    def test_unrelated_valid_resting_region_does_not_dilute_lift(self):
+        z,m,d=self.scene(1);d[25:55,60:110]=0
+        r=ObjectOnlyGraspDetector(min_lift_fraction=.8).detect(z,m,depth_unit='m',difference=d)
+        self.assertEqual(r.held,'held');self.assertEqual(r.metrics['elevated_fraction'],.25)
+        self.assertEqual(r.metrics['components'][0]['region_lift_fraction'],1.)
+
+    def test_connected_missing_region_keeps_local_coverage_guard(self):
+        z,m,d=self.scene();m[14:26,54:61]=True;z[14:26,54:61]=0
+        r=self.detect(z,m,d)
+        self.assertEqual(r.held,'unknown');self.assertEqual(len(r.metrics['observation_regions']),1)
+        self.assertIn('region_reference_coverage_low',r.metrics['components'][0]['failure_reasons'])
+        self.assertTrue(r.diagnostics['elevated_mask'].any())
+
+    def test_all_missing_or_subthreshold_islands_cannot_be_positive(self):
+        z,m,d=self.scene();z[:]=0
+        self.assertEqual(self.detect(z,m,d).held,'unknown')
+        z[:]=1;m[:]=False;m[5:8,5:8]=True;m[20:23,60:63]=True
+        r=self.detect(z,m,d);self.assertEqual(r.held,'unknown')
+        self.assertEqual(sum(c['pixels'] for c in r.metrics['components']),18)
+        self.assertTrue(all('component_area_low' in c['failure_reasons'] for c in r.metrics['components']))
+
+    def test_regions_do_not_pool_width_or_object_identity(self):
+        z,m,d=self.scene(1);m[:]=False;m[5:15,5:30]=True;m[25:35,60:85]=True
+        r=self.detect(z,m,d);self.assertEqual((r.held,r.bilateral),('held','unknown'))
+        self.assertEqual(r.metrics['visible_width_px'],25)
+        self.assertIn('multiple_regions_identity_unverified',r.warnings)
+        self.assertEqual({c['observation_region_id'] for c in r.metrics['components']},{1,2})
+
+    def test_missing_reference_or_partial_observation_cannot_prove_negative(self):
+        z,m,d=self.scene();det=ObjectOnlyGraspDetector()
+        self.assertEqual(det.detect(z,m,depth_unit='m').held,'unknown')
+        r=det.detect(z,m,depth_unit='m',intrinsics=CameraIntrinsics(100,100,60,30),
+            table=TablePlane((0,0,-1),1),whole_object_visible=True,mask_complete=True)
+        self.assertEqual(r.held,'unknown')
+        observed=np.ones_like(m);observed[25:55,60:110]=False;z[:]=1
+        r=self.detect(z,m,d,observed_mask=observed)
+        self.assertEqual(r.held,'held');self.assertEqual(r.metrics['valid_fraction'],.25)

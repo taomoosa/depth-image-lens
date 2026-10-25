@@ -20,8 +20,8 @@ def _component_labels(points):
     return labels
 
 
-def _corresponding_regions(pairs):
-    """Partition actual matched pairs until both endpoint sets are contiguous.
+def _corresponding_regions(pairs, *, include_pairs=False):
+    """Partition actual boundary pairs until both endpoint sets are contiguous.
 
     Repartition subsets because removing pairs assigned to another endpoint
     component can split a previously connected set. No bridge between hands or
@@ -45,6 +45,7 @@ def _corresponding_regions(pairs):
         regions.append({'hand_pixels':len(hand_labels),'object_pixels':len(object_labels),
             'matched_pairs':len(group),'hand_bbox_xyxy':bbox(hand_labels),
             'object_bbox_xyxy':bbox(object_labels)})
+        if include_pairs:regions[-1]['_pairs']=group
     return sorted(regions,key=lambda region:(region['hand_bbox_xyxy'],region['object_bbox_xyxy']))
 
 
@@ -140,15 +141,17 @@ class IndependentGraspDetector:
                     pairs.append((distance,ids,oy[ids],ox[ids]))
             near=np.isfinite(nearest);valid_hand=np.zeros(len(hx),bool);consistent_hand=np.zeros(len(hx),bool)
             hand_contact=np.zeros(z.shape,bool);object_contact=np.zeros(z.shape,bool);deltas=[];pair_trace=[]
-            nearest_pair_count=0;valid_pair_count=0;matched_pairs=[]
+            nearest_pair_count=0;valid_pair_count=0;matched_pairs=[];all_nearest_pairs=[];valid_pairs=[]
             for distance,ids,oy,ox in pairs:
                 choose=distance==nearest[ids];ids,oy,ox=ids[choose],oy[choose],ox[choose]
                 nearest_pair_count+=len(ids)
+                all_nearest_pairs.extend(zip(hy[ids].tolist(),hx[ids].tolist(),oy.tolist(),ox.tolist()))
                 good=valid[hy[ids],hx[ids]]&valid[oy,ox]
                 valid_pair_count+=int(good.sum())
                 ids,oy,ox=ids[good],oy[good],ox[good]
                 if not len(ids):continue
                 valid_hand[ids]=True
+                valid_pairs.extend(zip(hy[ids].tolist(),hx[ids].tolist(),oy.tolist(),ox.tolist()))
                 delta=np.abs(z[hy[ids],hx[ids]]-z[oy,ox]);deltas.extend(delta.tolist())
                 tolerance=4*np.finfo(float).eps*np.maximum(np.abs(z[hy[ids],hx[ids]]),np.abs(z[oy,ox]))
                 matched=delta<=self.depth_tolerance_m+tolerance
@@ -165,7 +168,33 @@ class IndependentGraspDetector:
             regions=_corresponding_regions(matched_pairs)
             corresponding_support=any(region['hand_pixels']>=self.min_contact_pixels
                 and region['object_pixels']>=self.min_contact_pixels for region in regions)
-            positive=corresponding_support and fraction>=self.min_consistent_fraction
+            # Partition before validity/depth filtering so missing or inconsistent
+            # neighbors within one patch cannot disappear from its diagnostics.
+            valid_set=set(valid_pairs);matched_set=set(matched_pairs);patches=[]
+            for patch in _corresponding_regions(all_nearest_pairs,include_pairs=True):
+                patch_pairs=patch.pop('_pairs')
+                patch['nearest_pair_count']=patch.pop('matched_pairs')
+                vp=[p for p in patch_pairs if p in valid_set]
+                mp=[p for p in patch_pairs if p in matched_set]
+                valid_points={p[:2] for p in vp};consistent_points={p[:2] for p in mp}
+                patch_fraction=len(consistent_points)/max(len(valid_points),1)
+                support_regions=_corresponding_regions(mp)
+                patch_support=any(r['hand_pixels']>=self.min_contact_pixels and
+                    r['object_pixels']>=self.min_contact_pixels for r in support_regions)
+                patch_positive=patch_support and patch_fraction>=self.min_consistent_fraction
+                patch.update(id=len(patches)+1,valid_hand_pixels=len(valid_points),
+                    valid_pair_count=len(vp),valid_fraction=min(len(valid_points)/max(patch['hand_pixels'],1),
+                        len(vp)/max(len(patch_pairs),1)),consistent_hand_pixels=len(consistent_points),
+                    consistent_fraction=patch_fraction,corresponding_contact_regions=support_regions,
+                    sufficient_connected_support=patch_support,positive=patch_positive,
+                    reason='supported_local_contact' if patch_positive else
+                        'no_valid_depth' if not vp else 'insufficient_connected_support' if not patch_support
+                        else 'mixed_depth_evidence')
+                patches.append(patch)
+            positive=any(p['positive'] for p in patches)
+            if len(patches)>1:warnings.append('contact_patches_evaluated_independently')
+            if positive and fraction<self.min_consistent_fraction:
+                warnings.append('local_positive_with_mixed_global_contact_evidence')
             if hand_component>=self.min_contact_pixels and object_component>=self.min_contact_pixels and not corresponding_support:
                 warnings.append('support_split_across_contact_regions')
             if near_count and coverage<self.min_valid_fraction:warnings.append('contact_depth_coverage_low')
@@ -201,7 +230,8 @@ class IndependentGraspDetector:
                         'consistent_hand_pixels':support,'consistent_object_pixels':int(object_contact.sum()),
                         'consistent_fraction':fraction,'hand_contact_component_pixels':hand_component,
                         'object_contact_component_pixels':object_component,
-                        'corresponding_contact_regions':regions,
+                        'corresponding_contact_regions':regions,'contact_patches':patches,
+                        'aggregation':'any_sufficient_local_patch_not_global_consistency',
                         'depth_delta_quantiles_m':[float(x) for x in np.quantile(deltas,[0,.5,.95])] if deltas else None},
                     'grasp_inference':{'status':'inferred' if estimate!='unknown' else 'insufficient_input',
                         'estimate':estimate,'negative_evidence_complete':absence_allowed,
@@ -209,6 +239,7 @@ class IndependentGraspDetector:
                             'object_component_sufficient':object_component>=self.min_contact_pixels,
                             'corresponding_region_sufficient':corresponding_support,
                             'consistent_fraction_sufficient':fraction>=self.min_consistent_fraction,
+                            'local_patch_sufficient':positive,
                             'depth_coverage_sufficient_for_negative':coverage>=self.min_valid_fraction}}}}
             if diagnostics:
                 near_mask=np.zeros(z.shape,bool);near_mask[hy[near],hx[near]]=True

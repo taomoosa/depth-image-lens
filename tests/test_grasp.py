@@ -158,3 +158,64 @@ class GraspTests(unittest.TestCase):
         obj[:]=False;r=detect(z,obj,hands)
         self.assertTrue(all(s['estimate']=='unknown' for s in r.sides.values()))
         json.dumps(r.to_dict(),allow_nan=False)
+
+
+class LocalPatchTests(unittest.TestCase):
+    def patches(self, bad_value=.5, contiguous=False):
+        z=np.ones((40,90));obj=np.zeros(z.shape,bool);left=np.zeros_like(obj);right=np.zeros_like(obj)
+        left[5:9,5]=True;obj[5:9,7]=True
+        right[5:9,75]=True;obj[5:9,77]=True
+        if contiguous:
+            left[9:21,5]=True;obj[9:21,7]=True;z[9:21,5]=bad_value
+        else:
+            left[20:32,30]=True;obj[20:32,32]=True;z[20:32,30]=bad_value
+        return z,obj,{'left':left,'right':right}
+
+    def test_other_inconsistent_patch_does_not_dilute_positive(self):
+        r=detect(*self.patches());side=r.sides['left']
+        self.assertEqual(side['estimate'],'likely');self.assertEqual(r.sides['right']['estimate'],'likely')
+        d=side['stages']['depth_consistency']
+        self.assertEqual(d['consistent_fraction'],.25)
+        self.assertEqual(sum(p['positive'] for p in d['contact_patches']),1)
+        self.assertIn('local_positive_with_mixed_global_contact_evidence',side['warnings'])
+        self.assertFalse(side['stages']['grasp_inference']['checks']['consistent_fraction_sufficient'])
+        self.assertTrue(side['stages']['grasp_inference']['checks']['local_patch_sufficient'])
+        json.dumps(r.to_dict(),allow_nan=False)
+
+    def test_invalid_patch_preserves_other_patch_and_diagnostics(self):
+        for value in (0,np.nan,np.inf):
+            r=detect(*self.patches(value));d=r.sides['left']['stages']['depth_consistency']
+            self.assertEqual(r.sides['left']['estimate'],'likely')
+            self.assertEqual(d['valid_near_fraction'],.25)
+            self.assertIn('no_valid_depth',[p['reason'] for p in d['contact_patches']])
+            self.assertEqual(r.sides['right']['estimate'],'likely')
+
+    def test_connected_inconsistency_is_not_split_to_force_positive(self):
+        r=detect(*self.patches(contiguous=True));d=r.sides['left']['stages']['depth_consistency']
+        self.assertEqual(r.sides['left']['estimate'],'unknown')
+        self.assertEqual(len(d['contact_patches']),1)
+        self.assertEqual(d['contact_patches'][0]['reason'],'mixed_depth_evidence')
+        self.assertEqual(r.sides['right']['estimate'],'likely')
+
+    def test_subthreshold_patches_do_not_pool(self):
+        z,obj,hands=self.patches();hands['left'][:]=False;obj[:]=False
+        for y,x in ((5,5),(20,30)):
+            hands['left'][y:y+2,x]=True;obj[y:y+2,x+2]=True
+        obj[5:9,77]=True;z[:]=1
+        r=detect(z,obj,hands)
+        self.assertEqual(r.sides['left']['estimate'],'unknown')
+        self.assertEqual(r.sides['right']['estimate'],'likely')
+        self.assertFalse(any(p['positive'] for p in r.sides['left']['stages']['depth_consistency']['contact_patches']))
+
+    def test_depth_fragmented_support_inside_patch_does_not_pool(self):
+        z,obj,hands=self.patches(contiguous=True);z[hands['left']]=.5
+        z[5:7,5]=1;z[10:12,5]=1
+        r=detect(z,obj,hands)
+        self.assertEqual(r.sides['left']['estimate'],'unknown')
+        self.assertEqual(r.sides['right']['estimate'],'likely')
+
+    def test_all_contact_depth_missing_remains_unknown(self):
+        z,obj,hands=self.patches();z[:]=0;r=detect(z,obj,hands)
+        self.assertTrue(all(side['estimate']=='unknown' for side in r.sides.values()))
+        self.assertTrue(all(not p['positive'] for side in r.sides.values()
+            for p in side['stages']['depth_consistency']['contact_patches']))

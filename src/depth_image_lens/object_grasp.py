@@ -5,6 +5,28 @@ from .depth import _numeric_image, _depth_16uc1_to_meters, depth_pair_16uc1_to_m
 from .geometry import CameraIntrinsics, TablePlane, bool_mask
 
 
+def _selected_regions(mask, valid):
+    """Mask-connected observation regions, including their missing pixels.
+
+    Missing pixels are not bridges for elevated geometry. Keeping them in the
+    coverage denominator prevents a connected mostly missing region from being
+    declared fully observed just by removing its invalid samples.
+    """
+    labels = np.zeros(mask.shape, np.int32); regions = []
+    for y, x in zip(*np.nonzero(mask)):
+        if labels[y, x]: continue
+        rid = len(regions)+1; labels[y, x] = rid; stack = [(int(y), int(x))]
+        count = observed = 0
+        while stack:
+            a, b = stack.pop(); count += 1; observed += int(valid[a, b])
+            for c, d in ((a-1,b), (a+1,b), (a,b-1), (a,b+1)):
+                if 0 <= c < mask.shape[0] and 0 <= d < mask.shape[1] and mask[c,d] and not labels[c,d]:
+                    labels[c,d] = rid; stack.append((c,d))
+        regions.append(dict(id=rid, pixels=count, valid_pixels=observed,
+            valid_fraction=observed/count))
+    return labels, regions
+
+
 @dataclass(frozen=True)
 class ObjectOnlyGraspResult:
     held: str
@@ -97,6 +119,7 @@ class ObjectOnlyGraspDetector:
         valid &= np.isfinite(evidence)
         selected = obj & valid
         t = self.thresholds
+        region_labels, observation_regions = _selected_regions(obj, valid)
         lifted = selected & (evidence - t['reference_error_m'] >= t['min_lift_m'])
         # Local four-neighbor continuity, no morphology, hole filling or component union.
         remaining = lifted.copy(); components = []; labels = np.zeros(z.shape, np.int32)
@@ -124,13 +147,20 @@ class ObjectOnlyGraspDetector:
                 runs[row] = best
             width = max((min(runs.get(row+offset, 0) for offset in range(t['min_width_rows']))
                          for row in runs), default=0)
+            region = observation_regions[int(region_labels[points[0]])-1]
+            local_fraction = len(points)/max(region['valid_pixels'], 1)
+            failures = []
+            if len(points) < t['min_pixels']: failures.append('component_area_low')
+            if local_fraction < t['min_lift_fraction']: failures.append('region_lift_fraction_low')
+            if region['valid_fraction'] < t['min_valid_fraction']: failures.append('region_reference_coverage_low')
             components.append(dict(id=len(components)+1, pixels=len(points),
+                observation_region_id=region['id'], region_valid_fraction=region['valid_fraction'],
+                region_lift_fraction=local_fraction, eligible=not failures, failure_reasons=failures,
                 sustained_width_px=width, max_contiguous_row_width_px=max(runs.values()),
                 qualifying_width_rows=sum(v >= t['min_width_px'] for v in runs.values())))
         count = int(obj.sum()); count_valid = int(selected.sum())
         coverage = count_valid/max(count, 1); fraction = int(lifted.sum())/max(count_valid, 1)
-        eligible = [c for c in components if c['pixels'] >= t['min_pixels']
-                    and c['pixels']/max(count_valid, 1) >= t['min_lift_fraction']]
+        eligible = [c for c in components if c['eligible']]
         wide = [c for c in eligible if c['sustained_width_px'] >= t['min_width_px']]
         cropped = bool(obj[0].any() or obj[-1].any() or obj[:,0].any() or obj[:,-1].any())
         warnings = ['assumes_static_hand_supported_object', 'single_hand_stretch_or_other_support_can_mimic_bilateral']
@@ -141,10 +171,13 @@ class ObjectOnlyGraspDetector:
         if cropped: warnings.append('cropped_visible_width_is_only_a_lower_bound')
         if coverage < t['min_valid_fraction']: warnings.append('reference_coverage_low')
         if len(eligible) > 1: warnings.append('multiple_components_not_combined')
+        if len(observation_regions) > 1: warnings.append('multiple_regions_identity_unverified')
+        if eligible and coverage < t['min_valid_fraction']:
+            warnings.append('local_positive_with_low_global_reference_coverage')
         held = bilateral = 'unknown'; reason = 'insufficient_elevation_support'
         if reference == 'missing': reason = 'missing_reference'
         elif count == 0: reason = 'no_selected_object'
-        elif coverage >= t['min_valid_fraction'] and eligible and fraction >= t['min_lift_fraction']:
+        elif eligible:
             held = 'held'; reason = 'sufficient_elevated_connected_region'
             if wide: bilateral = 'bilateral'
         elif (reference == 'table_normal_height_m' and whole_object_visible and mask_complete
@@ -156,10 +189,11 @@ class ObjectOnlyGraspDetector:
         metrics = dict(reference=reference, object_pixels=count, valid_pixels=count_valid,
             valid_fraction=coverage, elevated_pixels=int(lifted.sum()), elevated_fraction=fraction,
             reference_quantiles_m=[float(v) for v in np.quantile(evidence[selected], [.1,.5,.9])] if count_valid else None,
-            components=components, selected_component_id=chosen['id'] if chosen else None,
+            components=components, observation_regions=observation_regions,
+            aggregation='any_eligible_local_component_not_whole_object_confidence', selected_component_id=chosen['id'] if chosen else None,
             visible_width_px=chosen['sustained_width_px'] if chosen else None,
             width_axis='image_x', width_is_lower_bound=cropped or not whole_object_visible)
-        debug = dict(valid_reference_mask=selected, elevated_mask=lifted, component_labels=labels) if diagnostics else {}
+        debug = dict(valid_reference_mask=selected, elevated_mask=lifted, component_labels=labels, observation_region_labels=region_labels) if diagnostics else {}
         bilateral_reason = ('sufficient_same_component_visible_width' if bilateral == 'bilateral'
                             else 'insufficient_visible_width_not_unilateral' if held == 'held'
                             else 'elevated_support_not_established')
