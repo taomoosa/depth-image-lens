@@ -2,13 +2,21 @@ import json
 import unittest
 import numpy as np
 from depth_image_lens import BridgeDrapeDetector
-from .compare_auto import run
+from .auto_cases import cases
 from .test_bridge_drape import scene, inputs
 
 
 class AutoTests(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):cls.rows={r['scene']:r['auto'] for r in run()['rows']}
+    def setUpClass(cls):
+        cls.rows={};detector=BridgeDrapeDetector()
+        for name,mask,_,options in cases():
+            depth,difference=inputs(mask);kwargs={}
+            if options.get('missing'):depth[:,57:64]=0
+            if options.get('exclude'):kwargs['arm_mask']=mask
+            if options.get('depth_step'):
+                depth[mask&(np.indices(mask.shape)[1]>60)]=1.1;difference=2.-depth
+            cls.rows[name]=detector.detect_auto(depth,difference,upper_band=(8,20),**kwargs).to_dict()
     def test_typical_bridges(self):
         for name in ('flat','deep_u','bridge_asymmetric_drape','sloped_height_within_band'):
             with self.subTest(name=name):self.assertEqual(self.rows[name]['bridge'],'yes')

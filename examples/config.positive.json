@@ -1,0 +1,12 @@
+{
+  "difference_mode": "positive_foreground",
+  "depth_unit": "mm",
+  "difference_unit": "mm",
+  "upper_band": [
+    8,
+    20
+  ],
+  "detector": {
+    "threshold_m": 0
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "mode": "auto",
+  "depth_unit": "mm",
+  "background_unit": "mm",
+  "upper_band": [
+    8,
+    20
+  ],
+  "invalid_values": [
+    65535
+  ]
+}

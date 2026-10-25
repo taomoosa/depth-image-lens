@@ -21,12 +21,11 @@ After installation, run from the repository root:
 python examples/example_auto.py
 python examples/example_auto.py depth.npy difference.npy examples/config.auto.json
 python -m unittest discover -s tests -t . -v
-python -m tests.compare_auto
 ```
 
 ## Flow
 
-1. Extract valid positive-difference foreground; exclude arms and unavailable regions.
+1. Extract valid positive-difference foreground under the selected input contract; exclude arms and unavailable regions. In `positive_foreground` mode, finite zero is observed background/exclusion, while raw-depth or mask invalidity remains unknown.
 2. Search connected components below the upper band. Prefer separated upper endpoints at similar heights with a continuous path below them. Deep U-shaped paths do not need to cross one horizontal scanline.
 3. Require a bridge candidate to cover the lateral extent of other upper foreground, so half of a broken bridge does not invent an inner anchor. Inspect at most four components and two bridge candidates. A large adjacent depth discontinuity causes abstention.
 4. If no bridge is found, search long hanging components for upper necks. Two separate necks, or one neck plus observed opposite foreground at similar height, can supply a candidate pair.
@@ -44,21 +43,48 @@ Upper image clipping, missing depth, inappropriate height differences or unsuppo
 
 The independent bridge/sag/drape outputs are preserved. `image_left_local_hanging_extent_px` and `image_right_local_hanging_extent_px` add local asymmetry measurements near the candidates. The existing `drape=both` can describe a single connected bridge with a long tail on one side; it is not a symmetry assertion.
 
-## Fixed development comparison
+## Close views: missing hands and the upper third
 
-| Method | Matching bridge labels | False bridge | True bridge reported as no | Unknown |
-|---|---:|---:|---:|---:|
-| Manual ROIs | 15 | 1 | 0 | 2 |
-| Automatic candidates | 9 | 1 | 0 | 8 |
+The stationary, suspended-from-above assumption is compatible with this detector.
+It does not make an invisible connection observable. The current class tests a
+visible path between image anchor candidates. Its independent feature pass adds
+explicitly inferred one/two-support hypotheses from the visible silhouette, but
+cannot uniquely recover hidden supports or confirm physical grasp.
 
-These are 18 small 100x120 synthetic scenes. Unknown includes true bridges, so zero explicit false-negative `no` results does not mean full detection coverage. Manual mode received scene-specific anchor ROIs; automatic mode received only the upper band 8..20, plus an arm mask in the explicit exclusion case. Inputs are not equivalent.
+- If both candidate connections and the path remain visible, hand interiors and
+  entire arms need not be visible. Supply a suitable `upper_band` and an arm mask
+  if needed. A positive result is still a shape candidate, not verified contact.
+- If a substantial component touches an upstream image edge, automatic mode
+  returns `upper_foreground_clipped`. This covers all upstream edges for the
+  supplied `down`, including a tilted direction. It retains foreground/work masks
+  for the conservative anchor decision. Independent contour measurements and
+  support hypotheses continue with their inferred reference explicitly labeled.
+- For manual mode, translate hand ROIs into the cropped coordinates and mark
+  missing supports `hand_visibility=("hidden", "hidden")` (or the appropriate
+  per-side values). Do not move invisible ROIs into the image to obtain an answer.
+- An observed empty crop can return `bridge=no` with
+  `no_foreground_in_observed_image`. This is absence in the visible image only;
+  it is not evidence that no bridge exists above or outside the crop. All outputs
+  retain `scope=visible_shape_heuristic_not_holding_or_tension`.
 
-Flat bridges, deep U shapes, asymmetric tails and permitted height differences can produce bridge=yes without hand ROIs. One-sided drapes with observed opposite foreground produce left/right. Separate drapes produce bridge=no and drape=both. Missing opposite foreground, upper clipping, excessive height differences, missing depth, large gaps and depth steps produce unknown. Connections only through the upper arm region produce bridge=no.
+Crop depth, difference and every optional mask identically. Subtract the crop
+origin from ROI coordinates; recompute the projected upper band after cropping
+or translation. A pure translation does not change `down`. Bridge/drape image
+geometry needs no intrinsics. If the separate metric LiftDetector is used,
+update its camera principal point as described in the lift contract.
 
-For seven scenes with defined synthetic anchor points, the 14 candidate points had mean error about 2.85 pixels and maximum about 4.93 pixels. This is not ROI IoU or real hand-detection accuracy.
+`drape=left/right` names the image transverse direction, not a physical hand ID.
+A mapping supplied by the calling application is required before associating it
+with robot hands, and shape alone still does not prove holding. When a support
+or opposite search region is hidden, this API does not promote a visible tail
+into a one-handed grasp classification. Threshold adjustment cannot recover
+missing semantic or off-screen evidence.
 
-The remaining false bridge is an arm slab with the same depth shape as the flat deformable-object bridge. Both manual and automatic modes return yes. An explicit arm mask suppresses yes and returns unknown; excluded pixels do not become known empty space. The ambiguity is included in the totals.
 
-An initial run incorrectly treated half of a large broken bridge as a smaller bridge. The lateral-extent guard was added and rechecked on these same development scenes. This is not held-out evaluation or a parameter sweep. Nineteen regression tests include the known semantic failure, not nineteen correct observations.
-
-No matched real empty-background pair has been evaluated. Real accuracy, contact recognition and physical tension remain unvalidated.
+Feature-wise continuation: `stage_results` now runs alongside the conservative
+automatic-anchor result. An upper-clipped or anchorless silhouette retains
+morphology, visible-contour sag measurements and explicitly inferred static
+one/two-support hypotheses. Earlier automatic-anchor limitations above still
+apply to observed bridge and physical support identification; they no longer
+suppress these independent measurements. See RGBD.md for reference assumptions,
+quality warnings and root-output semantics.

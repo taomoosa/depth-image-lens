@@ -11,6 +11,12 @@ requires-python = ">=3.10"
 license = {file = "LICENSE"}
 dependencies = ["numpy>=1.24"]
 
+[project.optional-dependencies]
+corner = ["opencv-python-headless>=4.5.5"]
+
+[project.scripts]
+depth-image-lens = "depth_image_lens.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["depth_image_lens*"]

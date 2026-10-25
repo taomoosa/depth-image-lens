@@ -239,3 +239,19 @@ __marimo__/
 *.pcd
 *.log
 .env.*
+
+# Locally generated diagnostic arrays, JSON and SVG.
+/debug-output/
+
+# Evaluation tools and generated reports belong outside the public source tree.
+/evaluation/
+/evaluations/
+/benchmarks/
+/galleries/
+/reports/
+/research/
+/examples/benchmark_*.py
+/examples/compare_*.py
+/examples/evaluate_*.py
+/examples/gallery_*.py
+/tests/compare_*.py

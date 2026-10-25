@@ -103,7 +103,11 @@ class BridgeDrapeTests(unittest.TestCase):
         r=BridgeDrapeDetector().detect(*inputs(m),boxes);self.assertEqual((r.bridge,r.large_sag),('yes','no'))
         m=scene();m[:,60]=False
         self.assertEqual(BridgeDrapeDetector(max_gap_px=0).detect(*inputs(m),ROIS).bridge,'no')
-        r=BridgeDrapeDetector(max_gap_px=1).detect(*inputs(m),ROIS);self.assertEqual(r.bridge,'yes');self.assertTrue(r.features['gap_used'])
+        z,diff=inputs(m)
+        self.assertEqual(BridgeDrapeDetector(max_gap_px=1).detect(z,diff,ROIS).bridge,'no')
+        # Known-zero difference pixels still lie on the same depth surface in this recovery case.
+        z[20:27,60]=1.5
+        r=BridgeDrapeDetector(max_gap_px=1).detect(z,diff,ROIS);self.assertEqual(r.bridge,'yes');self.assertTrue(r.features['gap_used'])
         m=scene();m[:,55:65]=False
         self.assertEqual(BridgeDrapeDetector(max_gap_px=2).detect(*inputs(m),ROIS).bridge,'no')
         m=scene('left');m[65:,17:24]=True

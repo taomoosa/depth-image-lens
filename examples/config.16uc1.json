@@ -1,0 +1,11 @@
+{
+  "encoding": "16UC1",
+  "depth_scale_m": 0.001,
+  "upper_band": [
+    8,
+    20
+  ],
+  "detector": {
+    "threshold_m": 0
+  }
+}
