@@ -77,3 +77,25 @@ def largest_component(mask):
                     remaining[c,d] = False; stack.append((c,d))
         largest = max(largest, size)
     return largest
+
+
+def mask_observation_regions(mask, valid):
+    """Mask-connected observation regions, including their missing pixels.
+
+    Missing pixels are not bridges for elevated geometry. Keeping them in the
+    coverage denominator prevents a connected mostly missing region from being
+    declared fully observed just by removing its invalid samples.
+    """
+    labels = np.zeros(mask.shape, np.int32); regions = []
+    for y, x in zip(*np.nonzero(mask)):
+        if labels[y, x]: continue
+        rid = len(regions)+1; labels[y, x] = rid; stack = [(int(y), int(x))]
+        count = observed = 0
+        while stack:
+            a, b = stack.pop(); count += 1; observed += int(valid[a, b])
+            for c, d in ((a-1,b), (a+1,b), (a,b-1), (a,b+1)):
+                if 0 <= c < mask.shape[0] and 0 <= d < mask.shape[1] and mask[c,d] and not labels[c,d]:
+                    labels[c,d] = rid; stack.append((c,d))
+        regions.append(dict(id=rid, pixels=count, valid_pixels=observed,
+            valid_fraction=observed/count))
+    return labels, regions

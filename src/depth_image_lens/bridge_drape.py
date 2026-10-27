@@ -2,6 +2,7 @@
 from collections import deque
 from dataclasses import dataclass, field, replace
 import numpy as np
+from .debug import DebugResultMixin
 
 __version__ = "0.2.0"
 
@@ -42,7 +43,7 @@ def _depth_arrays(depth, difference, depth_unit, difference_unit, difference_sig
     return z, diff, valid
 
 @dataclass(frozen=True)
-class BridgeDrapeResult:
+class BridgeDrapeResult(DebugResultMixin):
     bridge: str
     large_sag: str
     drape: str
@@ -421,6 +422,7 @@ class BridgeDrapeDetector:
         before={'bridge':result.bridge,'large_sag':result.large_sag,'drape':result.drape,'reasons':dict(result.reasons)}
         bridge,sag,drape=result.bridge,result.large_sag,result.drape;reasons=dict(result.reasons)
         features=dict(result.features);diag={**result.diagnostics,**trace}
+        if diagnostics:diag['parameters']={**vars(self),'depth_jump_m':depth_jump_m,'down':list(down)}
         if stages['observed_bridge']['value']=='yes':
             bridge='yes';reasons['bridge']=stages['observed_bridge']['reason']
             if diagnostics:diag['bridge_corridor_mask']=trace['feature_observed_bridge_mask']

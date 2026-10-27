@@ -1,6 +1,7 @@
 """Seeded color assistance inside depth foreground; no semantic hand model."""
 from dataclasses import dataclass, field
 import numpy as np
+from .debug import DebugResultMixin
 
 from .bridge_drape import _mask
 from .depth import depth_pair_16uc1_to_meters
@@ -31,7 +32,7 @@ def _distance(colors, samples):
 
 
 @dataclass(frozen=True)
-class ColorAssistResult:
+class ColorAssistResult(DebugResultMixin):
     object_mask: np.ndarray = field(repr=False)
     hand_mask: np.ndarray = field(repr=False)
     uncertain_mask: np.ndarray = field(repr=False)
@@ -115,7 +116,9 @@ class SeededColorAssistant:
         summary = {
             'reason': reason, 'candidate_only': True, 'physical_contact_verified': False,
             'validation_status': 'not_validated', 'registration': 'caller_declared',
-            'color_order': color_order, 'foreground_pixels': int(fg.sum()),
+            'color_order': color_order, 'parameters':dict(max_color_distance=self.max_color_distance,
+                min_color_margin=self.min_color_margin,boundary_guard_px=self.boundary_guard_px),
+            'foreground_pixels': int(fg.sum()),
             'object_pixels': int(obj.sum()), 'hand_pixels': int(hand.sum()),
             'uncertain_pixels': int(uncertain.sum()),
             'hand_exclusion_pixels': int(hand_exclusion.sum()),

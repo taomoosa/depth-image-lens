@@ -32,3 +32,8 @@ __all__ += ["IndependentGraspDetector", "GraspResult"]
 from .object_grasp import ObjectOnlyGraspDetector, ObjectOnlyGraspResult
 
 __all__ += ["ObjectOnlyGraspDetector", "ObjectOnlyGraspResult"]
+
+from .reference import ReferenceGripperSegmenter, GripperReference, ReferenceSegmentationResult
+from .surface import DepthSurfaceDetector, SurfaceResult
+
+__all__ += ["ReferenceGripperSegmenter", "GripperReference", "ReferenceSegmentationResult", "DepthSurfaceDetector", "SurfaceResult"]

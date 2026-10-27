@@ -59,24 +59,34 @@ class CornerResult:
     def to_dict(self):
         return {'candidates':self.candidates, 'summary':self.summary}
 
-    def render_debug(self, color, *, color_order, mask_alpha=.2,
+    def render_debug(self, color=None, *, color_order="RGB", depth=None, depth_scale_m=.001, mask_alpha=.2,
                      show_contours=True, max_labels=12, panel=True):
         """Return a new uint8 overlay in the declared RGB/BGR order.
 
         The source remains at the top-left in its original pixel coordinates.
         A legend/details panel extends the canvas by default. No files are written.
         """
+        if color is None:
+            if depth is None:raise ValueError('supply color or depth for debug rendering')
+            from .debug import depth_canvas
+            color=depth_canvas(depth,depth_scale_m)
+            if color_order=='BGR':color=color[...,::-1]
         from .corner_debug import render_corner_debug
         return render_corner_debug(self, color, color_order=color_order,
             mask_alpha=mask_alpha, show_contours=show_contours,
             max_labels=max_labels, panel=panel)
 
-    def save_debug(self, path, color, *, color_order, overwrite=False, **render_options):
+    def save_debug(self, path, color=None, *, color_order="RGB", overwrite=False, depth=None, depth_scale_m=.001, **render_options):
         """Save a lossless PNG explicitly; existing paths are refused by default.
 
         The parent directory must already exist. Returns the destination Path.
         Detection never saves files implicitly.
         """
+        if color is None:
+            if depth is None:raise ValueError('supply color or depth for debug rendering')
+            from .debug import depth_canvas
+            color=depth_canvas(depth,depth_scale_m)
+            if color_order=='BGR':color=color[...,::-1]
         from .corner_debug import save_corner_debug
         return save_corner_debug(self, path, color, color_order=color_order,
             overwrite=overwrite, **render_options)

@@ -1,12 +1,13 @@
 """Small SVD fit for a caller-selected empty-table ROI; no segmentation."""
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 import numpy as np
+from .debug import DebugResultMixin
 from .geometry import TablePlane, bool_mask
 from .depth import _numeric_image, _validate_depth_scale
 
 
 @dataclass(frozen=True)
-class PlaneFitResult:
+class PlaneFitResult(DebugResultMixin):
     plane: TablePlane
     point_count: int
     valid_fraction: float
@@ -17,14 +18,16 @@ class PlaneFitResult:
     orientation: str
     warnings: tuple[str, ...] = ()
 
+    diagnostics: dict = field(default_factory=dict, repr=False)
+
     def to_dict(self):
         """Strict-JSON-safe summary, with no paths or image arrays."""
-        return asdict(self)
+        return {k:v for k,v in asdict(self).items() if k!='diagnostics'}
 
 
 def fit_table_plane(depth, intrinsics, table_mask, *, depth_scale_m=.001,
                     positive_direction=None, min_points=20, min_spread_m=.01,
-                    residual_warning_m=.005):
+                    residual_warning_m=.005, diagnostics=False):
     """Fit optical-axis depth in the camera frame using valid ROI points.
 
     Scale is metres per input count for EVERY dtype: .001 for millimetres,
@@ -32,6 +35,7 @@ def fit_table_plane(depth, intrinsics, table_mask, *, depth_scale_m=.001,
     Positive side faces the camera origin unless positive_direction is given.
     This least-squares fit is not robust to clutter or a wrong table ROI.
     """
+    if type(diagnostics) is not bool:raise ValueError('diagnostics must be bool')
     _validate_depth_scale(depth_scale_m)
     if (type(min_points) is not int or min_points < 3
             or not np.isfinite([min_spread_m,residual_warning_m]).all()
@@ -82,4 +86,6 @@ def fit_table_plane(depth, intrinsics, table_mask, *, depth_scale_m=.001,
     warnings = ('large_plane_residual',) if p95 > residual_warning_m else ()
     return PlaneFitResult(plane,count,float(count/max(int(roi.sum()),1)),
                           float(median),float(p95),float(rmse),tuple(float(v) for v in spread),
-                          'toward_camera_origin' if positive_direction is None else 'caller_direction',warnings)
+                          'toward_camera_origin' if positive_direction is None else 'caller_direction',warnings,
+        dict(table_mask=roi.copy(),valid_mask=valid,parameters=dict(min_points=min_points,
+            min_spread_m=min_spread_m,residual_warning_m=residual_warning_m)) if diagnostics else {})

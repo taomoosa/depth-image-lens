@@ -272,3 +272,18 @@ Corner results also provide `result.render_debug(color, color_order="RGB")` and
 explicit `result.save_debug("corner-debug.png", color, color_order="RGB")`.
 See [Corner rendering and input contracts](CORNER.md#render-and-save-debug-images)
 and `examples/example_corner_debug.py`. Detection itself never writes files.
+
+## Reference separation, surface inspection and debug views
+
+- [ReferenceGripperSegmenter](REFERENCE.md): one-time coarse boxes plus independent
+  empty/gripper-only captures per known pose; independent side uncertainty.
+- [DepthSurfaceDetector](SURFACE.md): calibrated height or same-pixel separation
+  and local nonflat evidence. Physical multilayer overlap remains unknown.
+- [Common result render/save](DEBUGGING.md): explicit PNG output and tuning
+  measurements for all spatial public results; optional OpenCV debug extra.
+- [Partial gripper context](OBJECT_GRASP.md): exclude gripper candidates before
+  object width, inspect area/span ratios without claiming physical grasp proof.
+
+These are experimental workflows. Repeatable-pose reference segmentation has not
+been validated on independent real reference pairs. No automatic free-view hand
+recognition, pose tracking or layer-count estimator is provided.

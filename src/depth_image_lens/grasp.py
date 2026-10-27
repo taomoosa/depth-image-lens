@@ -1,6 +1,7 @@
 """Independent visual grasp hypotheses from separated hand/object regions."""
 from dataclasses import dataclass, field, replace
 import numpy as np
+from .debug import DebugResultMixin
 from .depth import _numeric_image, _depth_16uc1_to_meters
 from .geometry import bool_mask, largest_component
 from .color import _erode
@@ -50,7 +51,7 @@ def _corresponding_regions(pairs, *, include_pairs=False):
 
 
 @dataclass(frozen=True)
-class GraspResult:
+class GraspResult(DebugResultMixin):
     sides: dict
     parameters: dict
     scope: str = 'visual_proximity_inference_not_physical_grasp'

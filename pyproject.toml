@@ -12,6 +12,7 @@ license = {file = "LICENSE"}
 dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
+debug = ["opencv-python-headless>=4.5.5"]
 corner = ["opencv-python-headless>=4.5.5"]
 
 [project.scripts]

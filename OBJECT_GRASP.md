@@ -120,3 +120,31 @@ arrays and supports strict JSON. `validation_status` remains `not_validated`.
 
 Run `python examples/example_object_grasp.py`. Regression scenes are synthetic,
 not real-data grasp accuracy. No data, model, API or robot operation is needed.
+
+## Partial grippers and decision metrics
+
+`detect` / `detect_16uc1` additionally accept `gripper_masks` (dictionary with
+optional `left`/`right` boolean HxW masks), `exclude_mask` and `uncertain_mask`.
+Gripper/excluded pixels are removed from the selected object before component
+width/area measurements. Uncertain selected pixels remain in the observation
+coverage denominator but cannot supply depth evidence. These are candidate masks,
+not semantic verification; reference segmentation may provide them. No masks are
+needed for an object-only selection already excluding grippers.
+
+With optional context, `metrics` adds `supplied_object_pixels`,
+`excluded_selected_pixels`, `uncertain_selected_pixels` and
+`gripper_comparisons`: visible area/span, observed fraction and selected lifted
+component area/width ratios. Empty gripper extent produces `None`, not infinity.
+Each component also records `bbox_xyxy`, `span_x_px`, `span_y_px`. Bounding-box
+span is diagnostic; the bilateral rule still uses sustained contiguous width,
+never a sum across disconnected islands. Ratios compare pixel extents, not
+physical areas; perspective and partial visibility change them. Missing grippers
+are not absence of support. Their extents are visible lower bounds.
+
+These ratios are **not new classification thresholds**. For example, a caller can
+request manual review when gripper exclusion is large or object observation is
+poor, while retaining a local held inference. A wide single-hand sheet can still
+satisfy the width-based bilateral heuristic: `physical_grasp` remains unknown.
+Excluding ambiguous selected pixels prevents a complete negative claim from
+being manufactured. Local positive evidence and whole-object confidence remain
+separate. Run `python examples/example_object_context.py`.

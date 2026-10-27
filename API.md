@@ -139,7 +139,7 @@ LiftDetector(*, lift_height_m=0.03, near_table_m=0.01, height_error_m=0.005,
              min_pixels=20, min_component_pixels=12, min_lift_fraction=0.1,
              min_valid_fraction=0.7)
 detector.detect(depth_m, intrinsics, table, object_mask, *,
-                exclude_mask=None, observed_mask=None, whole_object_visible=False)
+                exclude_mask=None, observed_mask=None, whole_object_visible=False, diagnostics=False)
 detector.detect_16uc1(depth, intrinsics, table, object_mask, *,
                       depth_scale_m=0.001, **options)
 ```
@@ -244,3 +244,17 @@ Lift keeps finite height statistics under low coverage; Corner candidates retain
 local line/depth measurements even when polygon acceptance fails. Their decision
 quality checks remain separate from numerical computability. No input validation
 errors are swallowed, and no missing geometric samples are synthesized.
+
+## Result debugging and additional inspection APIs
+
+All public spatial result types offer explicit `render_debug` / `save_debug`;
+see [DEBUGGING.md](DEBUGGING.md) for RGB/BGR, depth-only and overwrite contracts.
+`fit_table_plane(..., diagnostics=True)` also records its selected/valid ROI.
+No renderer starts acquisition or saves implicitly.
+
+- [ReferenceGripperSegmenter](REFERENCE.md): repeatable-pose empty/gripper-only
+  calibration with coarse setup boxes and runtime quality checks.
+- [DepthSurfaceDetector](SURFACE.md): height/reference separation and independent
+  local shape; physical layers remain unknown.
+- [ObjectOnly partial gripper context](OBJECT_GRASP.md): optional exclusion and
+  uncertainty masks plus visible pixel extent ratios.

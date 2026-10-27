@@ -1,11 +1,12 @@
 """Static visible-region elevation, independent of grasp evidence."""
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, replace
 import numpy as np
+from .debug import DebugResultMixin
 from .geometry import CameraIntrinsics, TablePlane, bool_mask, largest_component
 
 
 @dataclass(frozen=True)
-class LiftResult:
+class LiftResult(DebugResultMixin):
     state: str
     reason: str
     scope: str = "visible_region"
@@ -19,9 +20,11 @@ class LiftResult:
     stage_results: dict = field(default_factory=dict)
 
 
+    diagnostics: dict = field(default_factory=dict, repr=False)
+
     def to_dict(self):
         """Return JSON-safe scalar results; no source paths or image arrays."""
-        return asdict(self)
+        return {k:v for k,v in asdict(self).items() if k!='diagnostics'}
 
 
 class LiftDetector:
@@ -54,7 +57,27 @@ class LiftDetector:
         return self.detect(_depth_16uc1_to_meters(depth, depth_scale_m=depth_scale_m),
                            intrinsics, table, object_mask, **options)
 
-    def detect(self, depth_m, intrinsics: CameraIntrinsics, table: TablePlane,
+    def detect(self, depth_m, intrinsics, table, object_mask, *, exclude_mask=None,
+               observed_mask=None, whole_object_visible=False, diagnostics=False):
+        """Metric optical-axis depth; optional diagnostic masks do not change inference."""
+        if type(diagnostics) is not bool:raise ValueError('diagnostics must be bool')
+        result=self._detect(depth_m,intrinsics,table,object_mask,exclude_mask=exclude_mask,
+            observed_mask=observed_mask,whole_object_visible=whole_object_visible)
+        if not diagnostics:return result
+        z=np.asarray(depth_m,float);obj=np.asarray(object_mask,bool)
+        eligible=obj.copy()
+        if exclude_mask is not None:eligible &= ~exclude_mask
+        valid=eligible&np.isfinite(z)&(z>0)
+        if observed_mask is not None:valid &= observed_mask
+        with np.errstate(over='ignore',invalid='ignore'):
+            height=table.height(intrinsics.deproject(np.where(valid,z,0)))
+        valid &= np.isfinite(height)
+        return replace(result,diagnostics=dict(object_mask=obj.copy(),valid_mask=valid,
+            elevated_mask=valid&(height-self.height_error_m>self.lift_height_m),
+            near_table_mask=valid&(np.abs(height)+self.height_error_m<=self.near_table_m+1e-12),
+            parameters={k:v for k,v in vars(self).items()}))
+
+    def _detect(self, depth_m, intrinsics: CameraIntrinsics, table: TablePlane,
                object_mask, *, exclude_mask=None, observed_mask=None, whole_object_visible=False):
         """All masks share the rectified depth grid; missing depth is not empty space.
 
