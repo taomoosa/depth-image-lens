@@ -30,6 +30,7 @@ result.save_debug("debug.png", depth=depth_uint16, overwrite=True)
 | `ReferenceGripperSegmenter.segment` | `ReferenceSegmentationResult` | Hand/object/unknown masks, per-side reference quality. |
 | `DepthSurfaceDetector` | `SurfaceResult` | Independent elevation/nonflat/unknown masks and local measurements. |
 | `OverheadBoundaryDetector` | `BoundaryResult` | Object domain, color/depth bands, relative islands, background distances and optional topology. |
+| `BoundaryResult.filter_outer_proximity` | `BoundaryProximityResult` | Original/selected paths, exclusion band and artificial-border uncertainty; [options](BOUNDARY_PROXIMITY.md). |
 | `OuterContourDetector` | `OuterContourResult` | Ordered straight/curve intervals, corners, clipping and section IDs; [options](OUTLINE.md). |
 | `OverheadCornerDetector` | `CornerResult` | Specialized contour, candidate ID/status/reason overlay; [API](CORNER.md). |
 
@@ -88,3 +89,6 @@ depth_scale_m=.001, show_raw=True, show_ids=True, panel=True)`. Its inherited
 `save_debug(path, color=None, *, color_order="RGB", overwrite=False, **options)`
 forwards those render options and returns a Path. It does not accept the common
 mask_alpha/max_lines controls. No optional diagnostics are required for known contours.
+
+BoundaryProximity uses the specialized OuterContour-style render signature, with
+`show_ids=False` and no `show_raw` option. See its guide for exact options and labels.

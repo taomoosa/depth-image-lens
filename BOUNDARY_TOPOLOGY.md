@@ -207,3 +207,9 @@ is `inferred_junction_group_not_physical_identity`. No new image pixels are crea
 The debug image marks the inferred center with a cyan ring while retaining yellow
 raw junctions. `junction_grouping` is absent when the topology computation itself
 is insufficient. `counts['junctions']` always refers to raw junctions.
+
+## Outer proximity selection
+
+Use `result.filter_outer_proximity(near_px=8., reject_fraction=.7)` to obtain
+kept/excluded/pending selections without modifying the original graph. See
+[distance, holes, clipping and debug API](BOUNDARY_PROXIMITY.md).

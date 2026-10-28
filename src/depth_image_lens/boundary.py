@@ -138,6 +138,13 @@ class BoundaryResult(DebugResultMixin):
     def to_dict(self):
         return {k:v for k,v in vars(self).items() if not isinstance(v,np.ndarray) and k!='diagnostics'}
 
+    def filter_outer_proximity(self,*,near_px=8.,reject_fraction=.7,include_holes=False,
+                               observed_mask=None):
+        """Classify topology candidates without changing the original graph or masks."""
+        from .boundary_proximity import filter_outer_proximity
+        return filter_outer_proximity(self,near_px=near_px,reject_fraction=reject_fraction,
+                                      include_holes=include_holes,observed_mask=observed_mask)
+
     def render_debug(self,color=None,*,color_order='RGB',depth=None,depth_scale_m=.001,topology_labels=False,**options):
         """Existing mask panels plus fixed-scale darkness, gradient and residual heatmaps."""
         if type(topology_labels) is not bool:raise ValueError('topology_labels must be bool')

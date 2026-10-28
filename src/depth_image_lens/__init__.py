@@ -45,3 +45,7 @@ __all__ += ["OverheadBoundaryDetector", "BoundaryResult"]
 from .outline import OuterContourDetector, OuterContourResult
 
 __all__ += ["OuterContourDetector", "OuterContourResult"]
+
+from .boundary_proximity import BoundaryProximityResult
+
+__all__ += ["BoundaryProximityResult"]

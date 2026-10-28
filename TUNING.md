@@ -438,13 +438,13 @@ only reuse results from the same input/configuration.
 
 ## Debug API: arrays first, explicit PNG saving
 
-There are twelve renderable spatial result types: `BridgeDrapeResult`, `GraspResult`,
+There are thirteen renderable spatial result types: `BridgeDrapeResult`, `GraspResult`,
 `ObjectOnlyGraspResult`, `LiftResult`, `PlaneFitResult`, `ColorAssistResult`,
 `GripperReference`, `ReferenceSegmentationResult`, `SurfaceResult`, `CornerResult`,
-`BoundaryResult` and `OuterContourResult`. CameraIntrinsics/TablePlane and numeric tuples have no renderer;
+`BoundaryResult`, `OuterContourResult` and `BoundaryProximityResult`. CameraIntrinsics/TablePlane and numeric tuples have no renderer;
 render their downstream result. Detection and rendering never write files.
 
-All except Corner/Boundary/OuterContour use this signature:
+All except Corner/Boundary/OuterContour/BoundaryProximity use this signature:
 
 ```python
 result.render_debug(color=None, *, color_order='RGB', depth=None,
@@ -574,3 +574,25 @@ for match versus at_least and the limits of exposed-material-edge interpretation
 show_raw=True, show_ids=True, panel=True)` returns uint8; `save_debug` uses the same
 explicit PNG/non-overwrite contract and returns Path. Rendering flags affect display
 only. Run `python examples/example_outline.py --output NEW_IMAGE.png`.
+
+## BoundaryResult outer-proximity selection
+
+`result.filter_outer_proximity(*, near_px=8., reject_fraction=.7,
+include_holes=False, observed_mask=None)` selects topology candidates without
+changing source masks/graphs. [Full contract](BOUNDARY_PROXIMITY.md).
+
+| Parameter | Default | Unit and effect |
+|---|---|---|
+| `near_px` | 8.0 | Nonnegative px; larger includes more observed samples as near (distance <= limit), and expands artificial-border uncertainty |
+| `reject_fraction` | 0.7 | Ratio in (0,1]; lower excludes more paths (near fraction >= limit) |
+| `include_holes` | False | True also treats background holes as boundaries; False fills holes per component |
+| `observed_mask` | None | Optional bool HxW known observed domain; missing provenance cannot reveal an artificial internal crop |
+
+The result's kept/excluded/pending/ignored lists retain IDs and copied measurements.
+Only unique strong/weak coordinates contribute statistics; inferred samples do not.
+Frame/known ROI uncertainty is pending, not a physical exterior decision. Short paths
+stay ignored. Distance is to nearest background pixel center, not contour centers.
+`render_debug(color=None, *, color_order='RGB', depth=None, depth_scale_m=.001,
+show_ids=False, panel=True)` returns a before/after uint8 image; inherited save_debug
+returns a Path with explicit non-overwrite PNG saving. No mask_alpha/max_lines options.
+Run `python examples/example_boundary_proximity.py --output NEW_IMAGE.png`.

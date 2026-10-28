@@ -314,3 +314,7 @@ intervals near a requested length, not original material-edge identity. Frame/RO
 clipping, holes, missing depth and self-touch ambiguity are explicit. See
 [parameters, output and debug examples](OUTLINE.md) and run
 `python examples/example_outline.py`. Requires the optional `outline` OpenCV extra.
+
+Boundary topology also supports [outer-proximity selection](BOUNDARY_PROXIMITY.md):
+keep/exclude/pending lists based on observed near-edge fraction, retaining the
+original graph and measurements with explicit hole/ROI policies and debug comparison.
