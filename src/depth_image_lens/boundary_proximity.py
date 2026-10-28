@@ -118,7 +118,10 @@ def filter_outer_proximity(result,*,near_px=8.,reject_fraction=.7,include_holes=
     safe=cv.erode(observed.astype(np.uint8),np.ones((3,3),np.uint8),borderType=cv.BORDER_CONSTANT,borderValue=0)>0
     artificial=visible&~safe
     border_distance=cv.distanceTransform((~artificial).astype(np.uint8),cv.DIST_L2,cv.DIST_MASK_PRECISE) if artificial.any() else np.full(obj.shape,np.inf)
-    uncertain=visible&(border_distance<=near_px)
+    # Compare stored distances in float64 so NumPy does not round the caller's
+    # threshold to float32. This does not improve distance-transform precision.
+    distance_comparison=distance.astype(np.float64)
+    uncertain=visible&(border_distance.astype(np.float64,copy=False)<=near_px)
     records=[];channels={}
     for channel in ('color','depth'):
         graph=result.topology.get(channel)
@@ -149,7 +152,7 @@ def filter_outer_proximity(result,*,near_px=8.,reject_fraction=.7,include_holes=
             if not visible[y,x].all():row['reasons'].append('observed_points_outside_object_or_observed_domain');continue
             ids=np.unique(labels[y,x]);row['object_component_ids']=ids.tolist()
             if len(ids)!=1:row['reasons'].append('multiple_object_components')
-            d=distance[y,x];row.update(distances_px=d.astype(float).tolist(),min_distance_px=float(d.min()),near_observed_count=int((d<=near_px).sum()),near_fraction=float(np.mean(d<=near_px)),uncertain_border_count=int(uncertain[y,x].sum()))
+            d=distance_comparison[y,x];row.update(distances_px=d.astype(float).tolist(),min_distance_px=float(d.min()),near_observed_count=int((d<=near_px).sum()),near_fraction=float(np.mean(d<=near_px)),uncertain_border_count=int(uncertain[y,x].sum()))
             if row['uncertain_border_count']:row['reasons'].append('near_frame_or_known_unobserved_boundary')
             if row['reasons']:continue
             row['status']='excluded' if row['near_fraction']>=reject_fraction else 'kept'
@@ -161,4 +164,4 @@ def filter_outer_proximity(result,*,near_px=8.,reject_fraction=.7,include_holes=
     return BoundaryProximityResult(records,dict(near_px=float(near_px),reject_fraction=float(reject_fraction),include_holes=include_holes,
         distance_definition='euclidean_pixel_center_to_nearest_zero_of_per_component_hole_filled_or_original_mask',
         sample_definition='unique_strong_or_weak_xy',frame_policy='pending_if_any_observed_point_near_known_artificial_border'),
-        summary,obj.copy(),observed.copy(),visible&(distance<=near_px),uncertain.copy(),distance)
+        summary,obj.copy(),observed.copy(),visible&(distance_comparison<=near_px),uncertain.copy(),distance)

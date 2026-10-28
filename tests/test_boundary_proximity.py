@@ -36,6 +36,30 @@ class BoundaryProximityTests(unittest.TestCase):
         self.assertEqual(len(r.filter_outer_proximity(reject_fraction=.16).excluded),1)
         self.assertEqual(len(r.filter_outer_proximity(reject_fraction=.160001).kept),1)
 
+    def test_distance_float64_threshold_boundaries(self):
+        m=np.zeros((64,96),bool);m[10:54,10:86]=1
+        r=result([segment([(12,y) for y in range(18,46)])],m)
+        for threshold,near in [(2.9999999,False),(np.nextafter(3.,-np.inf),False),
+                               (3.,True),(np.nextafter(3.,np.inf),True),(3.0000001,True)]:
+            with self.subTest(threshold=threshold):
+                f=r.filter_outer_proximity(near_px=threshold,reject_fraction=.8)
+                self.assertEqual(f.records[0]['status'],'excluded' if near else 'kept')
+                self.assertEqual(f.records[0]['near_observed_count'],28 if near else 0)
+                self.assertEqual(f.records[0]['min_distance_px'],3.)
+                self.assertEqual(bool(f.near_mask[20,12]),near)
+                self.assertEqual(f.distance_px.dtype,np.float32)
+
+    def test_artificial_border_float64_threshold_boundaries(self):
+        m=np.zeros((64,96),bool);m[10:54,:86]=1
+        r=result([segment([(3,y) for y in range(18,46)])],m)
+        for threshold,near in [(2.9999999,False),(np.nextafter(3.,-np.inf),False),
+                               (3.,True),(np.nextafter(3.,np.inf),True),(3.0000001,True)]:
+            with self.subTest(threshold=threshold):
+                f=r.filter_outer_proximity(near_px=threshold)
+                self.assertEqual(f.records[0]['status'],'pending' if near else 'kept')
+                self.assertEqual(f.records[0]['uncertain_border_count'],28 if near else 0)
+                self.assertEqual(bool(f.uncertain_border_mask[20,3]),near)
+
     def test_hole_option(self):
         m=np.zeros((100,120),bool);m[10:90,10:110]=1;m[40:60,40:80]=0
         r=result([segment([(x,38) for x in range(42,78)])],m)

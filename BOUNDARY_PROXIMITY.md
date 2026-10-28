@@ -50,7 +50,9 @@ original per-component mask. The distance transform is explicitly zero-padded;
 image edges never accidentally have infinite distance. An axis-aligned boundary
 object pixel is normally distance1px, not0: this is **not** exact distance to contour
 pixel centers or a subpixel physical silhouette. `near_px=0` therefore normally has
-no near object pixels.
+no near object pixels. Comparisons promote stored distances to float64 so the
+caller threshold is not rounded to float32. The OpenCV distance transform and
+returned distance_px map remain float32; this does not add subpixel accuracy.
 
 The denominator is **unique XY coordinates with strong or weak evidence** in the
 source segment. Repeated samples/closed endpoints count once. Inferred points are
