@@ -41,3 +41,7 @@ __all__ += ["ReferenceGripperSegmenter", "GripperReference", "ReferenceSegmentat
 from .boundary import OverheadBoundaryDetector, BoundaryResult
 
 __all__ += ["OverheadBoundaryDetector", "BoundaryResult"]
+
+from .outline import OuterContourDetector, OuterContourResult
+
+__all__ += ["OuterContourDetector", "OuterContourResult"]

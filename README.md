@@ -303,3 +303,14 @@ Color evidence and relative relief do not establish wrinkles, layers or graspabi
 The optional [boundary topology API](BOUNDARY_TOPOLOGY.md) adds tunable weak-edge
 continuation, bounded inferred connections, ordered centerlines, corners and
 junctions while preserving the measured boundary masks.
+
+## Ordered external silhouette
+
+`OuterContourDetector` accepts a bool object mask and returns each component's raw
+closed contour plus a cyclic sequence of straight/curved/unknown sections and
+corner events. Optional calibrated depth adds observed 3D lengths; pixel geometry
+still works without depth. `result.query_edge_length(...)` finds visible straight
+intervals near a requested length, not original material-edge identity. Frame/ROI
+clipping, holes, missing depth and self-touch ambiguity are explicit. See
+[parameters, output and debug examples](OUTLINE.md) and run
+`python examples/example_outline.py`. Requires the optional `outline` OpenCV extra.

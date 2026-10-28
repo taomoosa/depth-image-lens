@@ -1,7 +1,7 @@
 # Debug images and tuning
 
 Detection never writes files. Public spatial **results** expose `render_debug`
-and explicit `save_debug`. Numerical computation uses NumPy, with OpenCV also required by Corner and Boundary; rendering
+and explicit `save_debug`. Numerical computation uses NumPy, with OpenCV also required by Corner, Boundary and OuterContour; rendering
 uses the optional existing OpenCV dependency (`pip install -e '.[debug]'`).
 No camera, model, GUI or remote service is started.
 
@@ -30,6 +30,7 @@ result.save_debug("debug.png", depth=depth_uint16, overwrite=True)
 | `ReferenceGripperSegmenter.segment` | `ReferenceSegmentationResult` | Hand/object/unknown masks, per-side reference quality. |
 | `DepthSurfaceDetector` | `SurfaceResult` | Independent elevation/nonflat/unknown masks and local measurements. |
 | `OverheadBoundaryDetector` | `BoundaryResult` | Object domain, color/depth bands, relative islands, background distances and optional topology. |
+| `OuterContourDetector` | `OuterContourResult` | Ordered straight/curve intervals, corners, clipping and section IDs; [options](OUTLINE.md). |
 | `OverheadCornerDetector` | `CornerResult` | Specialized contour, candidate ID/status/reason overlay; [API](CORNER.md). |
 
 `analyze_color_geometry` returns ordinary component results; render those
@@ -81,3 +82,9 @@ depth steps and relative-depth islands. See [BOUNDARY.md](BOUNDARY.md) for input
 parameter units, stage uncertainty and public `render_debug` / `save_debug` methods
 on `BoundaryResult`. `examples/example_boundary.py` is a minimal in-memory example.
 Color evidence and relative relief do not establish wrinkles, layers or graspability.
+
+OuterContour has `render_debug(color=None, *, color_order="RGB", depth=None,
+depth_scale_m=.001, show_raw=True, show_ids=True, panel=True)`. Its inherited
+`save_debug(path, color=None, *, color_order="RGB", overwrite=False, **options)`
+forwards those render options and returns a Path. It does not accept the common
+mask_alpha/max_lines controls. No optional diagnostics are required for known contours.

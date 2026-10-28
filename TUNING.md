@@ -438,13 +438,13 @@ only reuse results from the same input/configuration.
 
 ## Debug API: arrays first, explicit PNG saving
 
-There are eleven renderable spatial result types: `BridgeDrapeResult`, `GraspResult`,
+There are twelve renderable spatial result types: `BridgeDrapeResult`, `GraspResult`,
 `ObjectOnlyGraspResult`, `LiftResult`, `PlaneFitResult`, `ColorAssistResult`,
-`GripperReference`, `ReferenceSegmentationResult`, `SurfaceResult`, `CornerResult`
-and `BoundaryResult`. CameraIntrinsics/TablePlane and numeric tuples have no renderer;
+`GripperReference`, `ReferenceSegmentationResult`, `SurfaceResult`, `CornerResult`,
+`BoundaryResult` and `OuterContourResult`. CameraIntrinsics/TablePlane and numeric tuples have no renderer;
 render their downstream result. Detection and rendering never write files.
 
-All except Corner/Boundary use this signature:
+All except Corner/Boundary/OuterContour use this signature:
 
 ```python
 result.render_debug(color=None, *, color_order='RGB', depth=None,
@@ -537,3 +537,40 @@ it is not a universal CLI for all detectors. See [CLI/input details](DIAGNOSTICS
 Dataset-specific tuning runners, scene splits, numerical searches, real-data guides
 and galleries are intentionally outside Git. They are not runtime dependencies or
 additional public algorithms. No dataset accuracy is implied by these examples.
+
+## OuterContourDetector: ordered external intervals
+
+See [OUTLINE.md](OUTLINE.md) for the complete raw-edge ownership schema, per-call
+metric/observation contracts, query settings and runnable example. The mask-only
+API composes with segmentation; it does not itself perform color separation.
+
+| Constructor parameter | Default | Unit / increasing-value effect |
+|---|---|---|
+| `smoothing_px` | `1.0` | Gaussian sigma px; smooths turn noise but may suppress small corners; raw evidence unchanged |
+| `corner_window_px` | `8.0` | Arclength px; broader turn support |
+| `corner_turn_deg` | `45.0` | Degrees; fewer sharp corner events |
+| `min_corner_spacing_px` | `8.0` | Cyclic arclength px; suppresses nearby events |
+| `straight_turn_deg` | `5.0` | Degrees; admits more local low-curvature straight proposals |
+| `line_error_px` | `1.5` | Maximum raw TLS perpendicular error px; admits noisier/curvier lines |
+| `max_arc_chord_ratio` | `1.15` | Ratio; permits more raster roughness/backtracking |
+| `min_section_length_px` | `8.0` | Arclength px; marks more short sections unknown |
+| `min_straight_length_px` | `20.0` | Arclength px; requires more straight support |
+| `clip_margin_px` | `1` | Integer px; widens frame/unobserved-domain uncertainty |
+| `max_depth_jump_m` | `0.02` | Camera-Z metres; tolerates larger adjacent depth changes for complete metric length |
+
+`detect(object_mask, *, observed_mask=None, depth=None, depth_scale_m=.001,
+intrinsics=None, registered_to_mask=False, depth_valid_mask=None, diagnostics=False)`
+returns an OuterContourResult. Missing/bad optional metric inputs preserve pixel
+geometry. Explicit domain/mask contract errors remain fatal. No target length is
+used to construct predictions. `query_edge_length(target_length, *, unit='px',
+tolerance=None, mode='match', min_support_px=20., max_line_error_px=None,
+max_metric_line_error_m=.005, require_corner_endpoints=False)` is a separate result query. ToleranceNone means
+5px or0.005m; max_line_error_pxNone inherits the detector. The separate query-only
+3D line-error limit defaults to0.005m; image-straight does not imply straight in3D.
+See the detailed guide
+for match versus at_least and the limits of exposed-material-edge interpretation.
+
+`render_debug(color=None, *, color_order='RGB', depth=None, depth_scale_m=.001,
+show_raw=True, show_ids=True, panel=True)` returns uint8; `save_debug` uses the same
+explicit PNG/non-overwrite contract and returns Path. Rendering flags affect display
+only. Run `python examples/example_outline.py --output NEW_IMAGE.png`.
