@@ -14,6 +14,7 @@ dependencies = ["numpy>=1.24"]
 [project.optional-dependencies]
 debug = ["opencv-python-headless>=4.5.5"]
 corner = ["opencv-python-headless>=4.5.5"]
+boundary = ["opencv-python-headless>=4.5.5"]
 
 [project.scripts]
 depth-image-lens = "depth_image_lens.cli:main"

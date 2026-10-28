@@ -37,3 +37,7 @@ from .reference import ReferenceGripperSegmenter, GripperReference, ReferenceSeg
 from .surface import DepthSurfaceDetector, SurfaceResult
 
 __all__ += ["ReferenceGripperSegmenter", "GripperReference", "ReferenceSegmentationResult", "DepthSurfaceDetector", "SurfaceResult"]
+
+from .boundary import OverheadBoundaryDetector, BoundaryResult
+
+__all__ += ["OverheadBoundaryDetector", "BoundaryResult"]

@@ -258,3 +258,11 @@ No renderer starts acquisition or saves implicitly.
   local shape; physical layers remain unknown.
 - [ObjectOnly partial gripper context](OBJECT_GRASP.md): optional exclusion and
   uncertainty masks plus visible pixel extent ratios.
+
+## Overhead internal boundaries
+
+`OverheadBoundaryDetector` independently measures color foreground, local darkness,
+depth steps and relative-depth islands. See [BOUNDARY.md](BOUNDARY.md) for inputs,
+parameter units, stage uncertainty and public `render_debug` / `save_debug` methods
+on `BoundaryResult`. `examples/example_boundary.py` is a minimal in-memory example.
+Color evidence and relative relief do not establish wrinkles, layers or graspability.

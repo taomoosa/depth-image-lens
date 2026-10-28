@@ -4,6 +4,10 @@ Experimental shape heuristics (NumPy-only core) for a suspended **deformable obj
 
 The repository contains the implementation. No ZIP download is required.
 
+For site-specific adjustment, start with the [parameter and debug reference](TUNING.md):
+all public detector settings, units, interactions, uncertainty and explicit PNG output.
+Defaults are provisional; the guide distinguishes image evidence from physical claims.
+
 ## Quickstart: two in-memory uint16 arrays
 
 If your preprocessing already provides 2D NumPy ndarrays, no ROS or file conversion is needed:
@@ -287,3 +291,15 @@ and `examples/example_corner_debug.py`. Detection itself never writes files.
 These are experimental workflows. Repeatable-pose reference segmentation has not
 been validated on independent real reference pairs. No automatic free-view hand
 recognition, pose tracking or layer-count estimator is provided.
+
+## Overhead internal boundaries
+
+`OverheadBoundaryDetector` independently measures color foreground, local darkness,
+depth steps and relative-depth islands. See [BOUNDARY.md](BOUNDARY.md) for inputs,
+parameter units, stage uncertainty and public `render_debug` / `save_debug` methods
+on `BoundaryResult`. `examples/example_boundary.py` is a minimal in-memory example.
+Color evidence and relative relief do not establish wrinkles, layers or graspability.
+
+The optional [boundary topology API](BOUNDARY_TOPOLOGY.md) adds tunable weak-edge
+continuation, bounded inferred connections, ordered centerlines, corners and
+junctions while preserving the measured boundary masks.

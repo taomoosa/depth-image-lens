@@ -1,9 +1,12 @@
 # Debug images and tuning
 
 Detection never writes files. Public spatial **results** expose `render_debug`
-and explicit `save_debug`. Computation stays NumPy-only except Corner; rendering
+and explicit `save_debug`. Numerical computation uses NumPy, with OpenCV also required by Corner and Boundary; rendering
 uses the optional existing OpenCV dependency (`pip install -e '.[debug]'`).
 No camera, model, GUI or remote service is started.
+
+See [the complete parameter reference](TUNING.md) for exact defaults, units,
+threshold directions, call-time controls and runnable examples for every detector.
 
 ```python
 result = detector.detect(..., diagnostics=True)
@@ -26,6 +29,7 @@ result.save_debug("debug.png", depth=depth_uint16, overwrite=True)
 | `ReferenceGripperSegmenter.calibrate` | `GripperReference` | Generated reference hands, static ROI and coarse search boxes. |
 | `ReferenceGripperSegmenter.segment` | `ReferenceSegmentationResult` | Hand/object/unknown masks, per-side reference quality. |
 | `DepthSurfaceDetector` | `SurfaceResult` | Independent elevation/nonflat/unknown masks and local measurements. |
+| `OverheadBoundaryDetector` | `BoundaryResult` | Object domain, color/depth bands, relative islands, background distances and optional topology. |
 | `OverheadCornerDetector` | `CornerResult` | Specialized contour, candidate ID/status/reason overlay; [API](CORNER.md). |
 
 `analyze_color_geometry` returns ordinary component results; render those
@@ -69,3 +73,11 @@ metric/color thresholds using positives **and negatives**. Inspect each feature
 independently. Fewer unknowns is not necessarily higher correctness. See API,
 GRASP, OBJECT_GRASP, REFERENCE, SURFACE and CORNER for each knob and limits.
 Run `python examples/example_debug_results.py --output-dir EXISTING_DIRECTORY`.
+
+## Overhead internal boundaries
+
+`OverheadBoundaryDetector` independently measures color foreground, local darkness,
+depth steps and relative-depth islands. See [BOUNDARY.md](BOUNDARY.md) for inputs,
+parameter units, stage uncertainty and public `render_debug` / `save_debug` methods
+on `BoundaryResult`. `examples/example_boundary.py` is a minimal in-memory example.
+Color evidence and relative relief do not establish wrinkles, layers or graspability.
