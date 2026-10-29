@@ -211,4 +211,88 @@ class OuterContourTests(unittest.TestCase):
         check_partition(self,r);self.assertEqual(len(r.contours[0]['corners']),4)
 
 
+class OutlineSizeSequenceTests(unittest.TestCase):
+    def test_rectangle_polygon_pixels_and_perimeter(self):
+        m=np.zeros((100,140),bool);m[10:61,20:101]=1
+        r=OuterContourDetector().detect(m);c=r.contours[0]
+        self.assertEqual(c['area_px2'],4000.)
+        self.assertEqual(c['area_px'],c['area_px2'])
+        self.assertEqual(c['foreground_pixel_count'],51*81)
+        self.assertEqual(c['perimeter_px'],260.)
+        self.assertEqual(c['perimeter_px'],c['arc_length_px'])
+        self.assertEqual(c['hole_area_px2'],0.)
+
+    def test_hole_and_nested_island_measurements(self):
+        m=np.zeros((120,160),bool);m[10:100,10:100]=1;m[20:90,20:90]=0;m[40:70,40:70]=1
+        r=OuterContourDetector().detect(m);outer=r.largest_contour()
+        self.assertEqual(outer['area_px2'],89*89)
+        self.assertEqual(outer['foreground_pixel_count'],90*90-70*70)
+        self.assertEqual(sum(c['foreground_pixel_count'] for c in r.contours),int(m.sum()))
+        self.assertEqual(len(r.holes),1);h=r.holes[0]
+        self.assertEqual(h['area_px2'],71*71-2)
+        self.assertEqual(h['area_px2'],outer['hole_area_px2'])
+        self.assertEqual(h['area_px'],h['area_px2']);self.assertGreater(h['perimeter_px'],0)
+
+    def test_largest_by_foreground_vs_enclosed_area(self):
+        m=np.zeros((120,220),bool);m[10:100,10:100]=1;m[12:98,12:98]=0;m[20:80,130:190]=1
+        r=OuterContourDetector().detect(m)
+        self.assertEqual(r.largest_contour()['id'],0)
+        self.assertEqual(r.largest_contour(by='foreground_pixel_count')['id'],1)
+        self.assertEqual(r.largest_contour(by='perimeter_px')['id'],0)
+
+    def test_largest_empty_ties_and_no_mutation(self):
+        import copy
+        m=np.zeros((100,180),bool);m[10:60,10:60]=1;m[10:60,100:150]=1
+        r=OuterContourDetector().detect(m);r.contours[0]['id']=8;r.contours[1]['id']=2
+        before=copy.deepcopy(r.to_dict());selected=r.largest_contour();self.assertEqual(selected['id'],2)
+        selected['points_xy'][0][0]=999;self.assertEqual(r.to_dict(),before)
+        empty=OuterContourDetector().detect(np.zeros_like(m))
+        self.assertIsNone(empty.largest_contour());self.assertEqual(empty.resolve_sequence(),[])
+        with self.assertRaises(ValueError):empty.resolve_sequence(0)
+        with self.assertRaises(ValueError):r.largest_contour(by='unknown')
+
+    def test_resolved_order_corners_and_nonindex_ids(self):
+        import copy
+        r=OuterContourDetector().detect(rectangle());c=r.contours[0];c['id']=37
+        for item in c['segments']:
+            item['id']+=200;item['corner_ids']=[None if x is None else x+100 for x in item['corner_ids']]
+        for item in c['corners']:item['id']+=100
+        for item in c['sequence']:item['id']+=200 if item['type']=='segment' else 100
+        before=copy.deepcopy(r.to_dict());resolved=r.resolve_sequence(37)
+        self.assertEqual([(e['type'],e['id']) for e in resolved],[(e['type'],e['id']) for e in c['sequence']])
+        self.assertEqual(len(resolved),8);self.assertEqual(resolved,r.resolve_sequence())
+        for e in resolved:self.assertEqual(e['record']['id'],e['id'])
+        resolved[0]['record']['id']=999;self.assertEqual(r.to_dict(),before)
+
+    def test_curve_only_sequence_and_json_debug(self):
+        m=np.zeros((160,160),np.uint8);cv2.circle(m,(80,80),50,1,-1)
+        r=OuterContourDetector().detect(m>0,diagnostics=False);resolved=r.resolve_sequence()
+        self.assertEqual(len(resolved),1);self.assertEqual(resolved[0]['type'],'segment')
+        self.assertEqual(resolved[0]['record']['kind'],'curve')
+        json.dumps(r.to_dict(),allow_nan=False);json.dumps(resolved,allow_nan=False)
+        self.assertEqual(r.render_debug(panel=False).shape,(160,160,3))
+
+    def test_invalid_sequence_references_fail_clearly(self):
+        import copy
+        original=OuterContourDetector().detect(rectangle())
+        for mutation in ['missing','type','duplicate','omitted','duplicate_record']:
+            r=copy.deepcopy(original);c=r.contours[0]
+            if mutation=='missing':c['sequence'][0]['id']=999
+            elif mutation=='type':c['sequence'][0]['type']='invalid'
+            elif mutation=='duplicate':c['sequence'].append(c['sequence'][0].copy())
+            elif mutation=='omitted':c['sequence'].pop()
+            else:c['segments'].append(copy.deepcopy(c['segments'][0]))
+            with self.subTest(mutation=mutation),self.assertRaises(ValueError):r.resolve_sequence()
+        for key in (999,True,'0'):
+            with self.assertRaises(ValueError):original.resolve_sequence(key)
+        r=copy.deepcopy(original);r.contours.append(copy.deepcopy(r.contours[0]))
+        with self.assertRaises(ValueError):r.largest_contour()
+
+    def test_sizes_use_observed_foreground(self):
+        m=np.zeros((100,140),bool);m[10:90,10:130]=1;obs=np.ones_like(m);obs[:,70:]=0
+        r=OuterContourDetector().detect(m,observed_mask=obs);c=r.largest_contour()
+        self.assertEqual(c['foreground_pixel_count'],int((m&obs).sum()))
+        self.assertEqual(c['area_px2'],59*79);self.assertTrue(c['clipped'])
+
+
 if __name__=='__main__':unittest.main()

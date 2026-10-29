@@ -114,6 +114,63 @@ empty background. Repeated points at self-touching/narrow connections make the
 component ambiguous for query confirmation even if some local measurements exist.
 Curves separated only by a one-pixel mask bridge are not guaranteed material identity.
 
+## Contour size, largest selection and sequence traversal
+
+Every external contour now includes:
+
+| Field | Meaning |
+|---|---|
+| `area_px2` | Absolute area enclosed by the raw pixel-center outer polygon, in squared processing pixels. Includes its holes. |
+| `area_px` | Existing alias, unchanged; equal to area_px2. |
+| `hole_area_px2` | Sum of direct hole contour polygon areas, not the number of background pixels. |
+| `foreground_pixel_count` | Exact count of this 8-connected visible object component's pixels after applying observed_mask. Excludes holes and separate foreground islands within holes. |
+| `perimeter_px` | Alias of arc_length_px: cyclic raw pixel-center outer perimeter, excluding hole perimeters. |
+
+Each hole also has area_px2 (alias of its existing area_px) and perimeter_px.
+Polygon areas and pixel counts have different raster conventions: an inclusive
+41-by-21-pixel rectangle has area_px2=800 but foreground_pixel_count=861.
+Subtracting hole polygon area is not an exact material pixel count; use the explicit
+foreground count. No square-metre area or hidden object size is inferred. Clipped
+sizes are only sizes of the observed region and retain the existing clipped flag.
+
+```python
+largest = result.largest_contour()  # by='area_px2'
+# Alternative: result.largest_contour(by='foreground_pixel_count')
+# Alternative: result.largest_contour(by='perimeter_px')
+if largest is not None:
+    print(largest['id'], largest['area_px2'], largest['foreground_pixel_count'])
+    for entry in result.resolve_sequence(largest['id']):
+        record = entry['record']
+        if entry['type'] == 'segment':
+            print(entry['id'], record['kind'], record['fit_length_px'])
+        else:  # corner
+            print(entry['id'], record['xy'], record['turn_deg'])
+```
+
+`largest_contour(*, by='area_px2')` returns a detached deep copy of one complete
+contour dictionary, or None for an empty result. Allowed keys are exactly area_px2,
+foreground_pixel_count and perimeter_px. Ties choose the smallest integer contour
+ID, not the first list position. Unknown keys, duplicate/noninteger IDs or missing,
+nonfinite/negative size measurements raise ValueError. The source list is not sorted
+or filtered. Hole outlines are never largest-exterior candidates. Choosing the largest
+polygon may select a thin ring over a smaller solid component; choose foreground
+pixel count when that better matches the intended policy.
+
+`resolve_sequence(contour_id=None)` returns a list of
+`{'type': 'segment' or 'corner', 'id': integer, 'record': detached dictionary}`
+in exactly the stored cyclic sequence order. Omitted/None selects the largest
+polygon-area contour; an empty result returns []. An explicit contour ID must exist.
+The helper builds ID maps rather than indexing lists: nonconsecutive integer IDs
+work, and corner/segment IDs are separate namespaces. It checks for duplicate record
+IDs, missing/unknown references, duplicate references and omitted records; these
+raise ValueError rather than silently dropping evidence. It does not reconstruct or
+reclassify a damaged sequence. Mutating returned dictionaries does not change the
+result. Existing raw records/sequence remain available for callers using them directly.
+
+The helpers do not change query_edge_length's scope: that query still searches all
+contours. To associate its intervals with a selected contour, filter the query records
+by contour_id. Neither helper changes detection, debug rendering, thresholds or IDs.
+
 ## Optional 3D lengths
 
 ```python
@@ -150,6 +207,7 @@ arrays/diagnostics and is strict JSON compatible. Coordinate points and fit endp
 are XY; arrays index YX. Diagnostic sample coordinates are derived, never raw replacements.
 
 Each contour includes `id`, `status`, `points_xy`, `closed`, `orientation`, `area_px`,
+`area_px2`, `hole_area_px2`, `foreground_pixel_count`, `perimeter_px`,
 `edge_count`, `arc_length_px`, `clipped`, `self_touch`, `hole_ids`, `segments`, `corners`,
 `sequence`, `sequence_start_index`, `coverage_edge_count`. Status is computed,
 insufficient_support, ambiguous_self_touch or insufficient_computation_budget.

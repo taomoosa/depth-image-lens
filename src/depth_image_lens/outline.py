@@ -1,5 +1,6 @@
 """Ordered visible external-contour evidence, not material-edge identity."""
 from dataclasses import dataclass, field
+from copy import deepcopy
 import numpy as np
 from .debug import DebugResultMixin, _opencv, depth_canvas
 from .geometry import CameraIntrinsics, bool_mask
@@ -86,6 +87,63 @@ class OuterContourResult(DebugResultMixin):
 
     def to_dict(self):
         return dict(contours=self.contours,holes=self.holes,parameters=self.parameters,summary=self.summary)
+
+    @staticmethod
+    def _id_map(records,label):
+        mapping={}
+        for record in records:
+            key=record.get('id')
+            if isinstance(key,(bool,np.bool_)) or not isinstance(key,(int,np.integer)) or key in mapping:
+                raise ValueError(f'{label} requires unique integer IDs')
+            mapping[int(key)]=record
+        return mapping
+
+    def largest_contour(self,*,by='area_px2'):
+        """Return a detached largest-contour record; ties use the smallest ID.
+
+        Polygon area includes holes. foreground_pixel_count instead measures the
+        observed connected foreground, excluding holes and separate nested islands.
+        Empty results return None. This does not alter classification or queries.
+        """
+        if by not in ('area_px2','foreground_pixel_count','perimeter_px'):
+            raise ValueError('by must be area_px2, foreground_pixel_count or perimeter_px')
+        contours=self._id_map(self.contours,'contours')
+        for contour in contours.values():
+            value=contour.get(by)
+            if not isinstance(value,(int,float,np.integer,np.floating)) or not np.isfinite(value) or value<0:
+                raise ValueError(f'contour has no valid {by} measurement')
+        if not contours:return None
+        selected=min(contours.values(),key=lambda c:(-c[by],int(c['id'])))
+        return deepcopy(selected)
+
+    def resolve_sequence(self,contour_id=None):
+        """Return detached type/id/record entries in the stored cyclic order.
+
+        None selects the largest polygon area; an empty result returns []. An
+        explicit missing ID or invalid/ambiguous sequence raises ValueError.
+        IDs are looked up, never interpreted as list indices. No graph is rebuilt.
+        """
+        contours=self._id_map(self.contours,'contours')
+        if contour_id is None:
+            largest=self.largest_contour()
+            if largest is None:return []
+            contour_id=largest['id']
+        if isinstance(contour_id,(bool,np.bool_)) or not isinstance(contour_id,(int,np.integer)) or contour_id not in contours:
+            raise ValueError('contour_id must identify an existing contour')
+        contour=contours[contour_id]
+        lookup={'segment':self._id_map(contour['segments'],'segments'),
+                'corner':self._id_map(contour['corners'],'corners')}
+        resolved=[];seen=set()
+        for entry in contour['sequence']:
+            kind=entry.get('type');key=entry.get('id')
+            if kind not in lookup or isinstance(key,(bool,np.bool_)) or not isinstance(key,(int,np.integer)) or key not in lookup[kind]:
+                raise ValueError('sequence references an unknown type or record ID')
+            identity=(kind,int(key))
+            if identity in seen:raise ValueError('sequence contains a duplicate record reference')
+            seen.add(identity);resolved.append(dict(type=kind,id=int(key),record=deepcopy(lookup[kind][key])))
+        if seen!={(kind,key) for kind,records in lookup.items() for key in records}:
+            raise ValueError('sequence omits a segment or corner record')
+        return resolved
 
     def query_edge_length(self,target_length,*,unit='px',tolerance=None,mode='match',
                           min_support_px=20.,max_line_error_px=None,max_metric_line_error_m=.005,require_corner_endpoints=False):
@@ -213,13 +271,17 @@ class OuterContourDetector:
         hierarchy=[] if hierarchy is None else hierarchy[0]
         roots=sorted([i for i in range(len(raw)) if hierarchy[i][3]<0],key=lambda i:(int(raw[i][:,0,1].min()),int(raw[i][:,0,0].min()),i))
         contours=[];holes=[];debug={}
+        _,component_labels,component_stats,_=cv.connectedComponentsWithStats(visible.astype(np.uint8),connectivity=8)
         for cid,idx in enumerate(roots):
             pts,area=_canonical(raw[idx][:,0,:]);n=len(pts)
             for j in range(len(raw)):
                 if hierarchy[j][3]==idx:
-                    hp,ha=_canonical(raw[j][:,0,:]);holes.append(dict(id=len(holes),parent_contour_id=cid,points_xy=hp.tolist(),area_px=ha,role='hole_not_external_edge'))
+                    hp,ha=_canonical(raw[j][:,0,:]);holes.append(dict(id=len(holes),parent_contour_id=cid,points_xy=hp.tolist(),area_px=ha,area_px2=ha,perimeter_px=float(np.linalg.norm(np.roll(hp,-1,axis=0)-hp,axis=1).sum()),role='hole_not_external_edge'))
             record=self._decompose(pts,cid,safe,z,valid,intrinsics,metric_reason,diagnostics,debug)
             record['area_px']=area
+            label=component_labels[pts[0,1],pts[0,0]]
+            record.update(area_px2=area,hole_area_px2=float(sum(h['area_px2'] for h in holes if h['parent_contour_id']==cid)),
+                          foreground_pixel_count=int(component_stats[label,cv.CC_STAT_AREA]),perimeter_px=record['arc_length_px'])
             if area==0:record['orientation']='degenerate_zero_area'
             record['hole_ids']=[h['id'] for h in holes if h['parent_contour_id']==cid];contours.append(record)
         return OuterContourResult(contours,holes,self.parameters.copy(),dict(status='computed' if contours else 'no_visible_contour',

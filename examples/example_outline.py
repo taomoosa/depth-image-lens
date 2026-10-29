@@ -15,8 +15,15 @@ def main():
     query=result.query_edge_length(140,unit='px',tolerance=2,min_support_px=20,
                                    require_corner_endpoints=True)
     print(json.dumps({'summary':result.summary,'query':query},allow_nan=False,indent=2))
-    for contour in result.contours:
-        print('Contour',contour['id'],'cyclic order:',contour['sequence'])
+    largest=result.largest_contour()
+    if largest is not None:
+        print('Largest:',largest['id'],'polygon area px2:',largest['area_px2'],
+              'foreground pixels:',largest['foreground_pixel_count'])
+        for entry in result.resolve_sequence(largest['id']):
+            record=entry['record']
+            print(entry['type'],entry['id'],record.get('kind'),
+                  record.get('fit_length_px',record.get('turn_deg')))
+    # by='foreground_pixel_count' selects observed material pixels, excluding holes.
     image=result.render_debug(show_ids=True)
     assert image.dtype==np.uint8
     if args.output:print('Saved',result.save_debug(args.output))

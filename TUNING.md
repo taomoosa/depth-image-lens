@@ -596,3 +596,15 @@ stay ignored. Distance is to nearest background pixel center, not contour center
 show_ids=False, panel=True)` returns a before/after uint8 image; inherited save_debug
 returns a Path with explicit non-overwrite PNG saving. No mask_alpha/max_lines options.
 Run `python examples/example_boundary_proximity.py --output NEW_IMAGE.png`.
+
+### Outer contour size and ordered traversal
+
+These are result helpers, not detection thresholds. `result.largest_contour(*,
+by='area_px2')` selects enclosed polygon area by default; alternatives are
+`foreground_pixel_count` (holes excluded) and `perimeter_px`. Ties use the smallest
+ID; empty results return None. `result.resolve_sequence(contour_id=None)` resolves
+stored corner/segment IDs to detached records in cyclic order; None selects the
+largest area, empty returns [], invalid/duplicate/missing references raise ValueError.
+See [size and sequence semantics](OUTLINE.md#contour-size-largest-selection-and-sequence-traversal).
+The public outline example demonstrates both helpers. Sizes and selection do not
+change existing detection/query decisions; pixel area and physical area differ.
