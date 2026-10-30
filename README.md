@@ -318,3 +318,46 @@ clipping, holes, missing depth and self-touch ambiguity are explicit. See
 Boundary topology also supports [outer-proximity selection](BOUNDARY_PROXIMITY.md):
 keep/exclude/pending lists based on observed near-edge fraction, retaining the
 original graph and measurements with explicit hole/ROI policies and debug comparison.
+
+
+## Select an interior point in one column
+
+Run `python examples/example_vertical_interior.py --x 16` from the repository
+root. This NumPy example selects `[16, 16]` in the inclusive run `[12, 21]`, with
+vertical clearance `4` pixels. It uses only the selected column, not 2D distance
+or horizontal clearance. Add `--from-boundary-result` to demonstrate a
+`BoundaryResult.object_mask`, or `--largest-contour` to restrict to the largest
+visible connected component (these flags require optional OpenCV).
+
+```python
+from examples.example_vertical_interior import (
+    select_vertical_interior, contour_component_mask,
+)
+
+selection = select_vertical_interior(boundary_result.object_mask, x=16)
+# Or restrict an OuterContourResult to one component before selecting:
+component = contour_component_mask(outline_result)  # Largest polygon area.
+# component = contour_component_mask(outline_result, contour_id=chosen_id)
+selection = select_vertical_interior(component, x=16)
+if selection is not None:
+    x, y = selection["point_xy"]
+    print(selection["run_y_inclusive"], selection["vertical_clearance_px"])
+```
+
+The helpers live in the example, not the installed package API. IDs are looked
+up, not treated as list indices or connected-component labels. The component
+helper labels `object_mask & observed_mask` with 8-connectivity and selects the
+label at a raw contour point. It preserves holes and excludes separate objects
+inside those holes; filling an external polygon would not do this. Touching
+objects in one component remain inseparable. An empty outline gives an empty
+mask; an unknown explicit contour ID raises `ValueError`.
+
+Each contiguous True run in the column is considered separately. Choose the
+longest run, then the topmost for equal lengths, and the upper middle pixel for
+even lengths. `vertical_clearance_px = min(y - start, end - y)` measures distance
+between foreground pixel centers: endpoints and singletons have clearance zero.
+It is **not** distance to the first background pixel or a subpixel material edge.
+All-False columns return `None`; invalid mask type/shape or x raises `ValueError`.
+Top/bottom image contact sets `truncated=True`; reported clearance then describes
+only visible support, not a known physical edge. Artificial internal ROI cuts
+need caller interpretation; side-edge proximity never affects this calculation.
