@@ -50,6 +50,7 @@ def contour_component_mask(result, contour_id=None):
 
     None selects largest polygon area (the result's documented tie policy).
     No contours returns an all-False mask; an unknown explicit ID raises
+    ValueError. A missing, malformed or out-of-bounds start point also raises
     ValueError. IDs are looked up, never interpreted as component-label indices.
     Re-label object_mask & observed_mask, using a raw contour point as seed.
     Holes stay False and separate objects nested inside holes stay excluded.
@@ -69,8 +70,19 @@ def contour_component_mask(result, contour_id=None):
             raise ValueError('contour_id must identify exactly one contour')
         contour = matches[0]
     visible = result.object_mask & result.observed_mask
+    try:
+        seed = contour['points_xy'][0]
+        if len(seed) != 2:
+            raise ValueError('contour start must have exactly two coordinates')
+    except (KeyError, IndexError, TypeError) as error:
+        raise ValueError('contour must contain a start point in points_xy') from error
+    if any(isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, np.integer))
+           for v in seed):
+        raise ValueError('contour start coordinates must be finite integers')
+    x0, y0 = map(int, seed)
+    if not (0 <= x0 < visible.shape[1] and 0 <= y0 < visible.shape[0]):
+        raise ValueError('contour start is outside the mask grid')
     _, labels = cv2.connectedComponents(visible.astype(np.uint8), connectivity=8)
-    x0, y0 = contour['points_xy'][0]
     label = labels[y0, x0]
     if label == 0:
         raise ValueError('contour point no longer belongs to visible foreground')

@@ -132,6 +132,34 @@ class ContourComponentTests(unittest.TestCase):
         for value in [0, True, 0.5]:
             with self.assertRaises(ValueError): contour_component_mask(result, value)
 
+    def test_malformed_contour_start_rejected(self):
+        result = self.result()
+        original = result.largest_contour()
+        cases = [[], None, [[-1, 15]], [[15, -1]], [[70, 15]], [[15, 50]],
+                 [[1]], [[1, 2, 3]], [None], [1], [[1.0, 2]], [[1, np.nan]],
+                 [[np.inf, 2]], [[True, 2]], [['1', 2]], [[[1], [2]]]]
+        for points in cases:
+            with self.subTest(points=points):
+                contour = deepcopy(original)
+                contour['points_xy'] = points
+                malformed = replace(result, contours=[contour])
+                with self.assertRaises(ValueError):
+                    contour_component_mask(malformed, contour['id'])
+        contour = deepcopy(original)
+        del contour['points_xy']
+        with self.assertRaises(ValueError):
+            contour_component_mask(replace(result, contours=[contour]), contour['id'])
+        # Reproduce negative indexing into an unrelated right-edge component.
+        from depth_image_lens import OuterContourDetector
+        mask = np.zeros((60, 90), bool)
+        mask[2:50, 2:50] = True; mask[10:40, 10:40] = False
+        mask[20:28, 20:28] = True; mask[8:30, 75:90] = True
+        result = OuterContourDetector().detect(mask)
+        contour = result.largest_contour()
+        contour['points_xy'][0] = [-1, 15]
+        with self.assertRaises(ValueError):
+            contour_component_mask(replace(result, contours=[contour]), contour['id'])
+
     def test_boundary_result_input(self):
         from depth_image_lens import OverheadBoundaryDetector
         mask = np.zeros((24, 32), bool)

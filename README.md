@@ -350,7 +350,9 @@ helper labels `object_mask & observed_mask` with 8-connectivity and selects the
 label at a raw contour point. It preserves holes and excludes separate objects
 inside those holes; filling an external polygon would not do this. Touching
 objects in one component remain inseparable. An empty outline gives an empty
-mask; an unknown explicit contour ID raises `ValueError`.
+mask; an unknown explicit contour ID raises `ValueError`. Missing or malformed
+contour start points, noninteger coordinates and coordinates outside the mask
+grid also raise `ValueError` before component lookup.
 
 Each contiguous True run in the column is considered separately. Choose the
 longest run, then the topmost for equal lengths, and the upper middle pixel for
