@@ -116,6 +116,49 @@ class OuterContourResult(DebugResultMixin):
         selected=min(contours.values(),key=lambda c:(-c[by],int(c['id'])))
         return deepcopy(selected)
 
+    def component_mask(self, contour_id=None):
+        """Return a new bool mask for a visible 8-connected OuterContour component.
+
+        None selects largest polygon area (the result's documented tie policy).
+        No contours returns an all-False mask; an unknown explicit ID raises
+        ValueError. A missing, malformed or out-of-bounds start point also raises
+        ValueError. IDs are looked up, never interpreted as component-label indices.
+        Re-label object_mask & observed_mask, using a raw contour point as seed.
+        Holes stay False and separate objects nested inside holes stay excluded.
+        Uses optional OpenCV, as does OuterContourDetector. Touching objects already
+        in one 8-connected component cannot be separated by this helper.
+        """
+        cv2 = _opencv()
+        if contour_id is None:
+            contour = self.largest_contour()
+            if contour is None:
+                return np.zeros_like(self.object_mask, dtype=bool)
+        else:
+            if isinstance(contour_id, (bool, np.bool_)) or not isinstance(contour_id, (int, np.integer)):
+                raise ValueError('contour_id must be an integer ID')
+            matches = [c for c in self.contours if c['id'] == contour_id]
+            if len(matches) != 1:
+                raise ValueError('contour_id must identify exactly one contour')
+            contour = matches[0]
+        visible = self.object_mask & self.observed_mask
+        try:
+            seed = contour['points_xy'][0]
+            if len(seed) != 2:
+                raise ValueError('contour start must have exactly two coordinates')
+        except (KeyError, IndexError, TypeError) as error:
+            raise ValueError('contour must contain a start point in points_xy') from error
+        if any(isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, np.integer))
+               for v in seed):
+            raise ValueError('contour start coordinates must be finite integers')
+        x0, y0 = map(int, seed)
+        if not (0 <= x0 < visible.shape[1] and 0 <= y0 < visible.shape[0]):
+            raise ValueError('contour start is outside the mask grid')
+        _, labels = cv2.connectedComponents(visible.astype(np.uint8), connectivity=8)
+        label = labels[y0, x0]
+        if label == 0:
+            raise ValueError('contour point no longer belongs to visible foreground')
+        return labels == label
+
     def resolve_sequence(self,contour_id=None):
         """Return detached type/id/record entries in the stored cyclic order.
 

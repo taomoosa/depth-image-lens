@@ -280,3 +280,14 @@ a synthetic mask and queries a known pixel-center side. Dataset-specific replay,
 parameter comparison and Japanese human instructions live outside Git; existing
 real masks have no verified straight/curve/physical-length labels. They support
 operational sensitivity and visual checks, not a real accuracy claim.
+
+## Exact visible component mask
+
+`result.component_mask(contour_id=None)` returns a new bool mask from the visible
+8-connected component identified by the contour's raw start point. Omit the ID
+for the largest polygon area. Holes and separate objects inside holes stay
+excluded; no polygon filling is used. Empty outlines return an empty mask, while
+invalid explicit IDs or malformed seed coordinates raise `ValueError`. Recompute
+the outline after changing its input mask. See [overhead pick candidates](PICK_CANDIDATES.md)
+for a depth-supported interior-region use case. The previous example helper
+`contour_component_mask(result, contour_id)` delegates to this installed method.

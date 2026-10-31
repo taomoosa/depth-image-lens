@@ -344,8 +344,9 @@ if selection is not None:
     print(selection["run_y_inclusive"], selection["vertical_clearance_px"])
 ```
 
-The helpers live in the example, not the installed package API. IDs are looked
-up, not treated as list indices or connected-component labels. The component
+The column-selection helper lives in the example. The component helper now
+delegates to the installed `outline_result.component_mask(contour_id)` method.
+IDs are looked up, not treated as list indices or connected-component labels. The component
 helper labels `object_mask & observed_mask` with 8-connectivity and selects the
 label at a raw contour point. It preserves holes and excludes separate objects
 inside those holes; filling an external polygon would not do this. Touching
@@ -363,3 +364,31 @@ All-False columns return `None`; invalid mask type/shape or x raises `ValueError
 Top/bottom image contact sets `truncated=True`; reported clearance then describes
 only visible support, not a known physical edge. Artificial internal ROI cuts
 need caller interpretation; side-edge proximity never affects this calculation.
+
+## Current and empty-scene RGB-D masks
+
+`RGBDBackgroundSegmenter` combines registered current/empty color and depth pairs
+into a bool object mask for `OuterContourDetector` or `OverheadBoundaryDetector`.
+Depth can recover same-color objects; color can retain thin or missing-depth
+candidates with explicit uncertainty. It preserves holes and multiple components,
+with tunable color/depth thresholds and a depth-required option for stricter
+shadow rejection. See [input contracts, fusion and limits](RGBD_BACKGROUND.md)
+and `examples/example_rgbd_background.py`. Synthetic coverage does not establish
+real-image contour accuracy.
+
+## Supported overhead pick geometry
+
+`OverheadPickCandidateDetector` uses current/empty depth inside one selected
+`OuterContourResult` component to return elevated, locally supported regions and
+near-camera representative pixels. It guards contour edges, holes and missing
+depth, retains uncertainty, and rejects small/narrow regions. The installed
+`outline.component_mask(contour_id)` method also exposes exact component masks.
+See [contracts, tuning and counterexamples](PICK_CANDIDATES.md) and
+`examples/example_pick_candidate.py`. These are geometric candidates; physical
+pinch suitability remains unverified, including for elevated flat sheets.
+
+For step-by-step parameter adjustment and debugging of both stages, use
+[the RGB-D/pick tuning guide](RGBD_PICK_TUNING.md) and
+`examples/example_rgbd_pick_tuning.py`. The example accepts your registered
+current/empty NPZ arrays and JSON settings, and records masks, contour IDs,
+representative points and per-pixel evidence in a new output directory.

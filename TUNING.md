@@ -6,6 +6,16 @@ No setting establishes physical holding, safe grasping, tension or hidden layer 
 Change one evidence source at a time, preserve a baseline, and compare positive,
 negative and missing-data cases. Fewer unknowns alone is not improvement.
 
+## RGB-D background masks and overhead pick candidates
+
+See [the complete RGB-D/pick tuning guide](RGBD_PICK_TUNING.md) for every
+constructor setting, default, type, range, unit, adjustment direction and
+interaction, plus input-mask contracts, symptoms and debug interpretation.
+Run `python examples/example_rgbd_pick_tuning.py --output-dir debug-output/run-01`
+with an existing `debug-output` parent. The example also accepts registered
+current/empty NPZ inputs, JSON parameter overrides, a contour ID and a pixel to
+inspect; it saves masks, representative points and numeric diagnostics.
+
 ## Installation and common input contracts
 
 From the repository root in an isolated Python environment:

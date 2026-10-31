@@ -49,3 +49,11 @@ __all__ += ["OuterContourDetector", "OuterContourResult"]
 from .boundary_proximity import BoundaryProximityResult
 
 __all__ += ["BoundaryProximityResult"]
+
+from .background import RGBDBackgroundSegmenter, RGBDBackgroundResult
+
+__all__ += ["RGBDBackgroundSegmenter", "RGBDBackgroundResult"]
+
+from .pick import OverheadPickCandidateDetector, PickCandidateResult
+
+__all__ += ["OverheadPickCandidateDetector", "PickCandidateResult"]
