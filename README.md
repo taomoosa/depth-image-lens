@@ -392,3 +392,5 @@ For step-by-step parameter adjustment and debugging of both stages, use
 `examples/example_rgbd_pick_tuning.py`. The example accepts your registered
 current/empty NPZ arrays and JSON settings, and records masks, contour IDs,
 representative points and per-pixel evidence in a new output directory.
+
+- [Outer-edge bulge evidence](EDGE_BULGE.md): compare a raised outer band with the observed inward surface, with diagnostic reference masks.

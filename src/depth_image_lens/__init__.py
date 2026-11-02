@@ -57,3 +57,7 @@ __all__ += ["RGBDBackgroundSegmenter", "RGBDBackgroundResult"]
 from .pick import OverheadPickCandidateDetector, PickCandidateResult
 
 __all__ += ["OverheadPickCandidateDetector", "PickCandidateResult"]
+
+from .edge_bulge import OuterEdgeBulgeDetector, EdgeBulgeResult
+
+__all__ += ["OuterEdgeBulgeDetector", "EdgeBulgeResult"]

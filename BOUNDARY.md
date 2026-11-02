@@ -263,3 +263,9 @@ short inferred gap connections, ordered centerlines, corners and junctions.
 See [BOUNDARY_TOPOLOGY.md](BOUNDARY_TOPOLOGY.md) for parameter effects, coordinate
 conventions, evidence provenance and limits. Original measured masks and metrics
 remain unchanged; the graph is not physical wrinkle identity.
+
+## Raised outer-edge bands
+
+For a raised band attached to the outer silhouette, use the separate
+[OuterEdgeBulgeDetector](EDGE_BULGE.md). It compares the band to observed inward
+surface samples without requiring an enclosing ring. Existing islands are unchanged.

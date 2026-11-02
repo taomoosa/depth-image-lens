@@ -618,3 +618,5 @@ largest area, empty returns [], invalid/duplicate/missing references raise Value
 See [size and sequence semantics](OUTLINE.md#contour-size-largest-selection-and-sequence-traversal).
 The public outline example demonstrates both helpers. Sizes and selection do not
 change existing detection/query decisions; pixel area and physical area differ.
+
+For outer-edge relief, see [edge bulge parameters and debugging](EDGE_BULGE.md).
