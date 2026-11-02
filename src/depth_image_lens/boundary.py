@@ -138,6 +138,19 @@ class BoundaryResult(DebugResultMixin):
     def to_dict(self):
         return {k:v for k,v in vars(self).items() if not isinstance(v,np.ndarray) and k!='diagnostics'}
 
+    def measure_components(self, kind='color', *, max_search_states=100_000, max_search_edges=24):
+        """Sizes and bounded maximum edge-simple trails of color/depth topology.
+
+        Construct OverheadBoundaryDetector(trace_boundaries=True), then detect.
+        No graph or mask is changed. Cyclic search bounds are shared across this call; trees
+        and Euler trails use exact linear algorithms. See BOUNDARY_TOPOLOGY.md.
+        """
+        if kind not in ('color', 'depth'):
+            raise ValueError('kind must be color or depth')
+        from ._boundary_components import measure_graph
+        return measure_graph(self.topology.get(kind), self.object_mask.shape, kind,
+                             max_search_states, max_search_edges)
+
     def filter_outer_proximity(self,*,near_px=8.,reject_fraction=.7,include_holes=False,
                                observed_mask=None):
         """Classify topology candidates without changing the original graph or masks."""

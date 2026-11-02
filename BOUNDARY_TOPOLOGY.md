@@ -128,6 +128,136 @@ Lengths are Euclidean pixel arclength. Junction branch angles are between outwar
 arms (0..180), distinct from the corner turn convention. Connected-component IDs
 refer to raster skeleton connectivity, not different physical wrinkles.
 
+## Component sizes and maximum trails
+
+After detection with `trace_boundaries=True`, call the result method:
+
+```python
+report = result.measure_components('color')  # Or 'depth'; separate ID spaces.
+for component in report['components']:
+    print(component['id'], component['span_xy_px'], component['bbox_size_px'])
+    print(component['path_kind'], component['status'], component['max_trail_length_px'])
+    if not component['exact']:
+        print('Bounds:', component['lower_bound_length_px'], component['upper_bound_length_px'])
+    for part in component['trail']['parts']:
+        print(part['segment_id'], part['reversed'], part['points_xy'])
+```
+
+This is an on-demand measurement of the **existing compressed segment graph**.
+It does not rerun segmentation, join gaps, change graph IDs, or mutate any existing
+result. `diagnostics=True` is not required. `kind` accepts only `'color'` or
+`'depth'`. If tracing is disabled or that modality's topology is insufficient,
+the report has `status='insufficient'`, a `reason`, and an empty components list.
+Otherwise `status='computed'` means measurements were attempted; inspect each
+component's `status` and `exact`, since cyclic searches can be bounded.
+
+**Size:** `bbox_xyxy=[xmin,ymin,xmax,ymax]` uses inclusive pixel-center extrema,
+including both segment points and node-region `pixels_xy` (also isolated points).
+`span_xy_px=[xmax-xmin,ymax-ymin]` is the coordinate extent.
+`bbox_size_px=[xmax-xmin+1,ymax-ymin+1]` is the integer bounding-box width/height.
+An isolated pixel therefore has span `[0,0]` and bbox size `[1,1]`.
+These describe the centerline graph, not the full thickness of the original
+evidence band. `result.lines[*].pixels` is band area, and its IDs are not topology
+component IDs. `touches_image_boundary` only tests actual graph pixel contact;
+False does not prove absence of clipping or missing observations.
+
+**Trail definition:** one segment may be traversed at most once, in either
+direction. A junction vertex may be revisited. This is an *edge-simple trail*,
+not a vertex-simple path, shortest-path diameter, or unrestricted sum of branches.
+Corners are ordinary degree-two vertices: a trail continues through corner splits.
+Self-loops and parallel segments remain distinct edges. Only nodes with
+`kind='endpoint'` are terminal endpoints.
+
+| Component | Measurement convention |
+| --- | --- |
+| At least two terminal endpoints | Longest trail between **distinct** terminal endpoints; `path_kind='endpoint_trail'`. It may go around a loop before continuing to its other endpoint, using each segment once. |
+| Zero or one terminal endpoint | Longest nonempty closed trail, starting and ending at the same graph vertex; `path_kind='closed_trail'`. `endpoint_pair_available=False` and `max_endpoint_trail_length_px=None` distinguish it from an endpoint measurement. |
+| Pure cycle | One finite circuit, whether stored as one node-free loop or multiple corner-to-corner segments. |
+| Loop with one tail | Closed-trail convention measures the loop. The tail cannot be included by going out and back along the same edge. |
+| No traversable segments | `status='no_edges'`, exact length 0, empty trail parts; bbox still includes node pixels. |
+| No endpoint pair and no cycle | `status='no_closed_trail'`, exact determination that no nonempty closed trail exists; lengths are None. |
+
+A Y/T component's maximum endpoint trail omits the unused branch. Two loops joined
+by a bridge cannot both belong to one closed trail, because returning across that
+bridge would reuse it. A closed trail can include multiple loops meeting at the
+same junction when no edge is repeated. Short segments marked `short_path` remain
+part of this measurement; `min_path_length_px` does not remove them.
+
+**Length scope:** `length_px` values are summed along the chosen oriented segments.
+The existing graph collapses a junction region into a vertex and omits its internal
+pixel links. Travel *inside* that region is unmeasured and contributes zero here.
+Thus an exact result is exact **for that compressed graph**, not an exact full
+pixel-skeleton distance or a physical material length. Even with depth/intrinsics,
+these results are in processing-image pixels, not metres.
+
+`trail.parts` contains ordered, detached dictionaries with `segment_id`, `reversed`,
+`start_node`, `end_node`, `points_xy`, `evidence`, and `length_px`. Coordinates and
+evidence are reversed together when traversed backward. Do not concatenate the
+parts and blindly add distances across different junction attachment pixels:
+that invents a connector length. Such gaps are explicitly recorded in
+`trail.junction_transitions` with `status='junction_travel_unmeasured'` and zero
+included length. Closed-trail closure can also have such an unmeasured junction
+transition. A node-free pure loop has null node IDs and repeated first/last point.
+The report also supplies `start_xy`/`end_xy` inside `trail` for visualization.
+
+Each component includes `endpoint_node_ids`, `junction_node_ids`, `node_ids`,
+`segment_ids`, `total_segment_length_px` (all edges, deliberately separate from
+the maximum), `contains_inferred`, and `contains_weak`. The selected trail has
+`uses_inferred` and `uses_weak`. If `max_gap_px>0` was enabled in detection,
+inferred connectors contribute to both graph length and connectivity; they are
+not new measured boundary evidence. Leave `max_gap_px=0` to avoid such connectors.
+Endpoint nodes can arise from thresholds, ROI/cropping or depth missingness, and
+must not automatically be interpreted as physical ends of a wrinkle.
+
+### Exactness and bounded computation
+
+```python
+report = result.measure_components(
+    'depth', max_search_states=100_000, max_search_edges=24,
+)
+```
+
+- `max_search_states`: Python int, default 100000, range 0..1000000. This is a
+  **shared** budget of distinct exhaustive-search states across all components in
+  one call; deterministic component-ID order consumes it. Raising it can establish
+  more exact results at higher CPU/memory cost. Zero disables this search.
+- `max_search_edges`: Python int, default 24, range 0..64. General cyclic search is
+  skipped above this number of compressed segments per component. Corner splits
+  count too. Raising it may admit much harder searches, still bounded by states.
+- Trees use an exact weighted terminal-diameter algorithm. Connected graphs that
+  admit a full Euler trail/circuit under the selected endpoint convention use an
+  exact linear-time traversal. These fast cases work even with both search limits
+  zero. General cyclic branching graphs are **not** claimed to have a polynomial
+  maximum-trail algorithm.
+
+An exact solution has `status='exact'`, `exact=True`, and numeric
+`max_trail_length_px`. The appropriate specialized field is also filled:
+`max_endpoint_trail_length_px` or `max_closed_trail_length_px`.
+An unfinished or skipped general search has `status='bounded'`, `exact=False`,
+`max_trail_length_px=None` and both specialized maxima None. Its representative
+trail establishes `lower_bound_length_px`; `upper_bound_length_px` is the sum of
+all component segment lengths, which can be loose. **The representative lower
+bound must not be displayed as the maximum.** `reason` distinguishes edge/state
+limits, and `search_states` records work. The report summary counts bounded
+components and total search states. Ties return one deterministic representative,
+not every maximizing trail. For no-edge components the generic exact length is
+zero; a nonempty closed-trail maximum is still None.
+
+The returned dictionary is JSON-compatible and does not share mutable coordinate
+lists with the original topology. There is no cached automatic detection overhead.
+For executable examples with default/exhaustive limits and pixel overlays, run:
+
+```bash
+PYTHONPATH=src python examples/example_boundary_components.py
+PYTHONPATH=src python examples/example_boundary_components.py --output-dir /existing/parent/new-directory
+PYTHONPATH=src python examples/example_boundary_components.py --max-search-states 0 --output-dir /existing/parent/bounded-run
+```
+
+The example writes the topology debug view, separate representative trails and
+bounding boxes for color/depth, and measurement JSON. It draws each path part
+independently so unmeasured junction travel is not shown as an observed connector.
+These generated scenes test API geometry, not real-image boundary accuracy.
+
 With diagnostics enabled, `diagnostics['color_topology']` and `['depth_topology']`
 contain bool HxW `retained_mask`, `observed_centerline_mask`, and `inferred_mask`.
 The retained band includes weak threshold evidence. Graphs remain available with
