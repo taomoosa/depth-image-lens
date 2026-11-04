@@ -88,6 +88,15 @@ class OuterContourResult(DebugResultMixin):
     def to_dict(self):
         return dict(contours=self.contours,holes=self.holes,parameters=self.parameters,summary=self.summary)
 
+    def match_partial(self, target_points_xy, *, matcher=None, articulation=None):
+        """Match an open template to a visible exterior arc; see OUTLINE_MATCH.md."""
+        from .outline_match import PartialOutlineMatcher
+        if matcher is None:
+            matcher = PartialOutlineMatcher()
+        if not isinstance(matcher, PartialOutlineMatcher):
+            raise ValueError('matcher must be a PartialOutlineMatcher')
+        return matcher.match(target_points_xy, self, articulation=articulation)
+
     @staticmethod
     def _id_map(records,label):
         mapping={}

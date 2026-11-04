@@ -1,5 +1,9 @@
 # Ordered external contours and exposed-length candidates
 
+For matching an open target to a continuous portion of the current exterior,
+including an explicitly bounded sleeve-angle hypothesis, see
+[partial outline matching](OUTLINE_MATCH.md) and `result.match_partial(...)`.
+
 `OuterContourDetector` decomposes the visible external silhouette of each selected
 component into a cyclic sequence of straight intervals, curved intervals and corner
 events. It is an image-geometry helper, **not** material-edge identification or

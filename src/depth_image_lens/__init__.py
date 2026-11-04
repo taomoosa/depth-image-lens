@@ -61,3 +61,7 @@ __all__ += ["OverheadPickCandidateDetector", "PickCandidateResult"]
 from .edge_bulge import OuterEdgeBulgeDetector, EdgeBulgeResult
 
 __all__ += ["OuterEdgeBulgeDetector", "EdgeBulgeResult"]
+
+from .outline_match import PartialOutlineMatcher, PartialOutlineMatchResult, OutlineArticulation
+
+__all__ += ["PartialOutlineMatcher", "PartialOutlineMatchResult", "OutlineArticulation"]

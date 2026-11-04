@@ -1,4 +1,8 @@
-"""Ordered external contour and explicit pixel-length query; synthetic inputs."""
+"""Ordered external contour and explicit pixel-length query; synthetic inputs.
+
+For matching an open reference to these contours or other result classes, see
+example_outline_match.py and example_outline_match_sources.py.
+"""
 import argparse
 import json
 import numpy as np

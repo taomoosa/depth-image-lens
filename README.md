@@ -315,6 +315,16 @@ clipping, holes, missing depth and self-touch ambiguity are explicit. See
 [parameters, output and debug examples](OUTLINE.md) and run
 `python examples/example_outline.py`. Requires the optional `outline` OpenCV extra.
 
+`outline_result.match_partial(target_points_xy)` matches an open reference to a
+continuous exterior arc, with position/rotation/scale invariance and optional
+bounded sleeve articulation. It reports mismatch, missing evidence and competing
+locations separately. See [partial outline matching](OUTLINE_MATCH.md) and
+`examples/example_outline_match.py` for diagnostics and synthetic controls.
+For class-by-class connections from Boundary, Corner, RGBD, reference, color,
+surface, pick and other existing results, run
+`python examples/example_outline_match_sources.py`. It demonstrates mask and
+ordered-closed-contour routes while preserving observation/exclusion information.
+
 Boundary topology also supports [outer-proximity selection](BOUNDARY_PROXIMITY.md):
 keep/exclude/pending lists based on observed near-edge fraction, retaining the
 original graph and measurements with explicit hole/ROI policies and debug comparison.
