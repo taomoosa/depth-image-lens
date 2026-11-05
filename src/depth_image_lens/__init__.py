@@ -65,3 +65,7 @@ __all__ += ["OuterEdgeBulgeDetector", "EdgeBulgeResult"]
 from .outline_match import PartialOutlineMatcher, PartialOutlineMatchResult, OutlineArticulation
 
 __all__ += ["PartialOutlineMatcher", "PartialOutlineMatchResult", "OutlineArticulation"]
+
+from .corner_outline_match import CornerOutlineMatcher
+
+__all__ += ["CornerOutlineMatcher"]

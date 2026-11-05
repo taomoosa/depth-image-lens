@@ -2,3 +2,4 @@ include LICENSE README.md API.md AUTO.md DIAGNOSTICS.md RGBD.md GRASP.md OBJECT_
 recursive-include examples *.py *.json
 recursive-include tests *.py
 include OUTLINE_MATCH.md
+include CORNER_OUTLINE_MATCH.md

@@ -89,6 +89,63 @@ class PartialOutlineTests(unittest.TestCase):
         self.assertFalse(rigid.match_contour(self.target, current).matched)
         self.assertTrue(rigid.match_contour(self.target, current, articulation=self.art).matched)
 
+    def curved_reference(self, amplitude):
+        u = np.linspace(0, 1, 85)
+        side = self.current[0]*(1-u[:, None]) + self.current[1]*u[:, None]
+        side[:, 0] += amplitude*np.sin(np.pi*u)
+        outline = OuterContourDetector(corner_turn_deg=35).detect(
+            mask_of(np.vstack([side[:-1], self.current[1:]])))
+        contour = outline.largest_contour()
+        points = np.asarray(contour['points_xy'], float)
+        first, last = [min(contour['corners'], key=lambda c: np.linalg.norm(np.asarray(c['xy'])-p))
+                       for p in ([60, 155], [66, 30])]
+        start = first['point_index']
+        count = (last['point_index']-start) % len(points)
+        corners = sorted([c for c in contour['corners']
+                          if (c['point_index']-start) % len(points) <= count],
+                         key=lambda c: (c['point_index']-start) % len(points))
+        sparse = np.asarray([c['xy'] for c in corners], float)
+        dense = points[(start+np.arange(count+1)) % len(points)]
+        return outline, sparse, dense
+
+    def test_articulation_preserves_rigid_search_at_acceptance_threshold(self):
+        outline, sparse, _ = self.curved_reference(8)
+        # The old joint seed suppression lost the rigid fit: score .977 became
+        # 1.060, scale 1.088 and sleeve angle -10, incorrectly failing the match.
+        for factor in (1., .9):
+            limits = {k: v*factor for k, v in self.matcher.parameters.items()
+                      if k.startswith('max_') and k != 'max_candidates'}
+            matcher = PartialOutlineMatcher(**limits)
+            rigid = outline.match_partial(sparse, matcher=matcher)
+            flexible = outline.match_partial(sparse, matcher=matcher, articulation=self.art)
+            self.assertEqual(rigid.status, 'matched')
+            self.assertEqual(flexible.status, 'matched')
+            self.assertLessEqual(flexible.best['score'], rigid.best['score']+1e-12)
+            self.assertTrue(flexible.diagnostics['rigid_baseline_preserved'])
+
+    def test_same_mask_dense_arc_preserves_curve_lost_by_corner_chords(self):
+        outline, sparse, dense = self.curved_reference(16)
+        coarse = outline.match_partial(sparse)
+        original = outline.match_partial(dense)
+        self.assertEqual(coarse.status, 'not_matched')
+        self.assertEqual(original.status, 'matched')
+        self.assertLess(original.best['score'], .1)
+        self.assertAlmostEqual(original.best['scale'], 1., delta=.01)
+
+    def test_noncorner_endpoints_across_seam_without_detected_corners(self):
+        outline = OuterContourDetector(corner_turn_deg=180).detect(mask_of(self.current))
+        contour = outline.largest_contour()
+        self.assertEqual(contour['corners'], [])
+        points = np.asarray(contour['points_xy'], float)
+        start, end = [int(np.argmin(np.linalg.norm(points-p, axis=1)))
+                      for p in ([60, 120], [100, 35])]
+        self.assertGreater(start, end)  # wraps the array seam
+        target = points[(start+np.arange((end-start) % len(points)+1)) % len(points)]
+        result = outline.match_partial(target)
+        self.assertEqual(result.status, 'matched')
+        np.testing.assert_allclose([result.best['start_xy'], result.best['end_xy']],
+                                   target[[0, -1]], atol=2)
+
     def test_fold_and_missing_sleeve_negatives(self):
         cases = [sleeve(self.current, 90), sleeve(self.current, -75),
                  np.delete(self.current, [2, 3], axis=0)]

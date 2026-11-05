@@ -325,29 +325,17 @@ class PartialOutlineMatcher:
                 incomplete = True
                 sources[-1]['reason'] = 'insufficient_arc_length'
                 continue
-            starts = np.arange(p['search_samples'])/p['search_samples']
-            spans = np.linspace(*p['fraction_range'], p['length_samples'])
-            grid = np.array(np.meshgrid(starts, spans, indexing='ij')).reshape(2, -1).T
-            rows, count = self._evaluate(grid, contour, observed, templates, cid)
+            rows, count = self._search(contour, observed, templates, cid)
             evaluations += count
-            # Keep independent locations, including unsupported geometric lookalikes.
-            seeds = self._distinct(rows, 12)
-            all_rows = seeds[:]
-            ds = 1/p['search_samples']
-            dl = (p['fraction_range'][1]-p['fraction_range'][0])/(p['length_samples']-1)
-            for _ in range(3):
-                offsets = np.array(np.meshgrid([-ds/2, 0, ds/2], [-dl/2, 0, dl/2])).reshape(2, -1).T
-                refined = np.array([[r['_start'], r['fraction']] for r in seeds])[:, None, :] + offsets
-                refined = refined.reshape(-1, 2)
-                refined[:, 0] %= 1
-                refined[:, 1] = np.clip(refined[:, 1], *p['fraction_range'])
-                rows, count = self._evaluate(np.unique(refined, axis=0), contour, observed, templates, cid)
+            if len(templates) > 1:
+                # Joint spatial suppression can replace a rigid seed with a
+                # rotated hypothesis whose local refinement converges worse.
+                # Preserve the same zero-articulation search as articulation=None.
+                rigid = [template for template in templates if template[0] == 0.]
+                baseline, count = self._search(contour, observed, rigid, cid)
                 evaluations += count
-                all_rows.extend(rows)
-                seeds = self._distinct(all_rows, 12)
-                ds /= 2
-                dl /= 2
-            candidates.extend(self._distinct(all_rows, p['max_candidates']+1))
+                rows.extend(baseline)
+            candidates.extend(self._distinct(rows, p['max_candidates']+1))
         # Prefer a fully supported passing candidate to an occluded lookalike.
         candidates.sort(key=lambda r: (not (r['supported'] and r['score'] <= 1), r['score'], r['contour_id']))
         passing = [r for r in candidates if r['supported'] and r['score'] <= 1]
@@ -376,12 +364,38 @@ class PartialOutlineMatcher:
             max_angle_deg=float(articulation.max_angle_deg), angle_step_deg=float(articulation.angle_step_deg))
         diagnostics = dict(reasons=reasons, evaluated_hypotheses=evaluations,
                            template_angles_deg=[v[0] for v in variants],
+                           rigid_baseline_preserved=True,
                            search='finite_grid_with_three_local_refinements', search_complete=False,
                            source_contours=sources, candidate_found=bool(passing),
                            scope='visible_partial_outline_not_whole_object_state',
                            arc_coordinate_system='simplified_contour_arclength',
                            score_kind='maximum_limit_ratio_not_probability')
         return PartialOutlineMatchResult(status, matched, best, candidates[:p['max_candidates']], config, diagnostics)
+
+    def _search(self, contour, observed, templates, cid):
+        p = self.parameters
+        starts = np.arange(p['search_samples'])/p['search_samples']
+        spans = np.linspace(*p['fraction_range'], p['length_samples'])
+        grid = np.array(np.meshgrid(starts, spans, indexing='ij')).reshape(2, -1).T
+        rows, evaluations = self._evaluate(grid, contour, observed, templates, cid)
+        # Keep independent locations, including unsupported geometric lookalikes.
+        seeds = self._distinct(rows, 12)
+        all_rows = seeds[:]
+        ds = 1/p['search_samples']
+        dl = (p['fraction_range'][1]-p['fraction_range'][0])/(p['length_samples']-1)
+        for _ in range(3):
+            offsets = np.array(np.meshgrid([-ds/2, 0, ds/2], [-dl/2, 0, dl/2])).reshape(2, -1).T
+            refined = np.array([[r['_start'], r['fraction']] for r in seeds])[:, None, :] + offsets
+            refined = refined.reshape(-1, 2)
+            refined[:, 0] %= 1
+            refined[:, 1] = np.clip(refined[:, 1], *p['fraction_range'])
+            rows, count = self._evaluate(np.unique(refined, axis=0), contour, observed, templates, cid)
+            evaluations += count
+            all_rows.extend(rows)
+            seeds = self._distinct(all_rows, 12)
+            ds /= 2
+            dl /= 2
+        return all_rows, evaluations
 
     @staticmethod
     def _distinct(rows, count):

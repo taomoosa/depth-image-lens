@@ -7,6 +7,11 @@ a correctly spread shirt. The target can cover about 30–40% of its perimeter.
 The result describes that visible part only. A matching side can coexist with a
 crumpled opposite side; the result is not a whole-shirt spreadness classifier.
 
+For an opt-in alternative that fits internal corners and separately reports
+rotation, X/Y scale and every edge's errors, see
+[CornerOutlineMatcher](CORNER_OUTLINE_MATCH.md). The legacy matcher below remains
+the default; the alternative needs at least three non-collinear interior corners.
+
 ```python
 import numpy as np
 from depth_image_lens import (
@@ -155,6 +160,10 @@ they do not establish segmentation correctness or real-shirt matching accuracy.
    Turning uses chords at radii 2 and 5 of 64 samples by default, avoiding raw
    one-pixel staircase angles. No free deformation is optimized after alignment.
 5. Refine up to 12 distinct spatial seeds three times in start/length space.
+   With articulation, also run the zero-articulation search independently and
+   merge its candidates. A rotated coarse hypothesis must not displace the rigid
+   seed and lose a better rigid fit during refinement. This costs an additional
+   rigid search. A newly found competing location can still cause `ambiguous`.
    Suppress alternatives whose arc overlap exceeds 60% of the shorter arc, then
    compare distinct passing locations. All traversed raw edges must be observed,
    including short unavailable edges between resampled points. A simplified edge
@@ -167,6 +176,61 @@ Finite sampling can miss the correct interval; changing search density may chang
 the result. `diagnostics.search_complete` is always false. Near-threshold cases
 need a denser search and visual review. Candidate suppression can merge nearby
 valid placements, so absence of an ambiguity flag does not prove uniqueness.
+
+## A target extracted from the same image does not match
+
+`score` is an error ratio: smaller is better; all six geometric guards must be
+at most 1 for a fully observed candidate to pass. Inspect `best['metrics']` and
+`best['reasons']` to see the failed guards. The fitted scale or sleeve angle is
+the best retained hypothesis, not proof that the garment physically changed.
+
+Corner coordinates alone connect by straight chords and can discard a curved
+torso or sleeve edge. To retain the reference image's shape, use corners to select
+**endpoints**, then retain the intervening ordered contour points:
+
+```python
+# reference_outline is the result for the reference mask.
+c = reference_outline.largest_contour()
+points = np.asarray(c['points_xy'], dtype=float)
+# Select two entries from c['corners']; point_index indexes THIS contour.
+i = start_corner['point_index']
+j = end_corner['point_index']
+target = points[(i + np.arange((j-i) % len(points) + 1)) % len(points)]
+# This selects the forward cyclic arc, even across the array seam. Choose
+# endpoint order for the desired side, keep >=3 and <=2048 target vertices,
+# and check that the reference arc is fully observed before accepting it.
+result = current_outline.match_partial(
+    target,
+    matcher=PartialOutlineMatcher(search_samples=256, length_samples=49),
+    articulation=None,
+)
+```
+
+Start with `articulation=None` for the same-image check; it disables sleeve
+rotation, while global similarity fitting still allows translation, rotation and
+scale. `PartialOutlineMatcher` has no fixed-scale or fixed-global-rotation option.
+Do not carry sparse target articulation indices into a dense target: indices
+refer to the supplied target vertices, and the pivot uses that target's XY frame.
+
+The start/end search uses the **whole perimeter**, independent of detected
+corners. Its default starts are 128 equally spaced arclength positions, with 25
+lengths from `fraction_range=(.20,.55)` and three local refinements. It does not
+enumerate every pair of raw vertices. Ensure `fraction_range` includes the
+desired arc's share of the **simplified current perimeter**; a narrow wrong range
+can force an enlarged, distorted fit. Increase to 256/49 or 512/101 to diagnose
+finite-search errors, at greater computation cost. `sample_count` controls shape
+representation, not start-position density. Independently simplifying the target
+and full contour at `simplify_px=.75` can also cause small same-image residuals;
+compare `simplify_px=0` for diagnosis, while keeping raster staircase sensitivity
+in mind. Neither a denser search nor more permissive thresholds restores curves
+already removed from a corner-only target.
+
+Synthetic regression cases include a curved shirt side from the same mask:
+five corner chords failed with score 1.065, while the corresponding dense arc
+passed with 0.038. Another case formerly changed from rigid score 0.977 (`matched`)
+to 1.060 (`not_matched`) when sleeve rotation was enabled. Preserving the rigid
+search fixes that regression. These are controlled examples, not measured
+real-shirt accuracy or a diagnosis of an unseen user image.
 
 Global Hu-moment comparison does not provide an ordered open-to-subarc alignment
 ([OpenCV shape API](https://docs.opencv.org/4.0.1/d3/dc0/group__imgproc__shape.html)).

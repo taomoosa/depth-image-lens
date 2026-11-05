@@ -320,6 +320,14 @@ continuous exterior arc, with position/rotation/scale invariance and optional
 bounded sleeve articulation. It reports mismatch, missing evidence and competing
 locations separately. See [partial outline matching](OUTLINE_MATCH.md) and
 `examples/example_outline_match.py` for diagnostics and synthetic controls.
+Opt in with `matcher=CornerOutlineMatcher()` to align interior bends and report
+global/sleeve rotation, separate target-axis scales and per-edge errors. See
+[corner-based matching](CORNER_OUTLINE_MATCH.md) and
+`examples/example_corner_outline_match.py`; it requires at least three
+non-collinear interior bends and retains explicit ambiguity checks.
+Its optional `max_skipped_corners=1` or `2` tolerates extra current bends while
+keeping their geometry in edge checks; see `examples/example_corner_outline_skips.py`
+for bounded-search timing and fold controls.
 For class-by-class connections from Boundary, Corner, RGBD, reference, color,
 surface, pick and other existing results, run
 `python examples/example_outline_match_sources.py`. It demonstrates mask and
