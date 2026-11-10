@@ -100,8 +100,7 @@ not locate hands, verify alignment or map image sides to robot IDs.
 
 Run `python examples/example_grasp.py` for a small generated example, and
 `python -m unittest tests.test_grasp -v` for focused regressions. These tests cover
-explicit geometry contracts; they do not establish field accuracy. Real-data
-annotations, evaluation scripts and galleries remain outside this MIT repository.
+explicit geometry contracts; they do not establish field accuracy.
 
 ## Tuning local versus global evidence
 

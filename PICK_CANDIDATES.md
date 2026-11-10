@@ -71,7 +71,7 @@ mask and segmentation uncertainty; pick geometry does not reclassify color.
 Outline must be a fresh `OuterContourResult` for that mask and grid. Do not edit
 its stored mask/contour records between extraction and selection.
 
-`outline.component_mask(contour_id)` is now an installed method. It labels
+`outline.component_mask(contour_id)` labels
 `object_mask & observed_mask` with 8-connectivity and uses a raw contour seed,
 without filling a polygon. Holes, nonconvex notches, separate nested objects and
 other components are therefore excluded. An empty outline without an explicit
@@ -132,17 +132,8 @@ region-radius constraint. Local work is chunked to bound window temporaries.
 
 ## Settings
 
-| Setting | Default | Units / contract |
-| --- | ---: | --- |
-| `min_elevation_m` | .01 | Positive baseline separation after error allowance |
-| `reference_error_m` | .002 | Nonnegative assumed reference error allowance, metres |
-| `boundary_guard_px` | 3 | Nonnegative clearance around contour, missingness and uncertainty |
-| `local_radius_px` | 2 | Integer 1..10; default window is 5x5 |
-| `min_support_fraction` | .8 | Consistent fraction of full square, strictly >.5 and <=1 |
-| `local_depth_tolerance_m` | .003 | Positive tolerance around both local medians |
-| `min_region_area` | 25 | Positive integer accepted area, pixels |
-| `min_region_radius_px` | 2 | Nonnegative minimum interior distance for representative candidates |
-| `nearest_depth_band_m` | .003 | Nonnegative tolerance from nearest supported local Z |
+See [pick settings](RGBD_PICK_TUNING.md#pick-settings) for defaults, valid ranges
+and adjustment directions.
 
 Pixel distances are Euclidean distance to the nearest excluded **pixel center**,
 with an artificial one-pixel zero border outside the image. A boundary foreground
@@ -200,10 +191,7 @@ against a nonuniform baseline, and the flat-sheet counterexample. The checkout
 has no suitable registered real RGB-D current/empty evaluation pairs; real-image
 accuracy and physical pinch success remain unvalidated.
 
-Limited checks on stored real depth arrays with constructed reference images
-confirm input handling and exclusion behavior only. Some noisy/sloping recorded
-surfaces return `unknown` under the default local tolerance and width settings,
-even with an artificially positive reference separation. Inspect support and
-clearance diagnostics before tuning; a rejected region is not proof of physical
-unpickability. No independent overhead empty/current capture pair was available
-for these checks.
+Noisy or sloping surfaces can return `unknown` under the default support and
+width settings. Inspect support and clearance before tuning: a rejected region
+is not proof of physical unpickability. Constructed reference images cannot
+validate accuracy on independently captured empty/current pairs.

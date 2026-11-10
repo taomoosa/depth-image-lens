@@ -272,9 +272,8 @@ optional image evidence. See linked contracts for permitted ranges and failure r
 
 `OverheadCornerDetector.recommended_for_tuning()` selects `proposal_policy="multiscale"`,
 `support_policy="adaptive"`, `angle_stability_mode="diagnostic"`. It retains other
-constructor defaults, including `min_fit_support=4`. A prior external numerical
-selection of support6 is **not** the constructor/preset default or a real-robot optimum.
-Pass explicit overrides, e.g. `recommended_for_tuning(min_fit_support=6)`, only after
+constructor defaults, including `min_fit_support=4`. Pass explicit overrides,
+e.g. `recommended_for_tuning(min_fit_support=6)`, only after
 checking short/cropped true corners and unmatched detections in your setup.
 Separate proposal/fitted tolerances and `boundary_mixing_m` from their legacy fallback
 controls before independent tuning. Diagnostic stability removes only that rejection;
@@ -304,16 +303,15 @@ convexity, support, geometry, visibility and requested depth gates remain.
    Tune metric step/noise and island context separately. Agreement is spatial proximity,
    not a calibrated probability. Intrinsics change island residual to normal distance;
    depth-step thresholds always use detrended camera-Z differences.
-6. Enable graph tracing with weak ratios1/gap0 first. Lower ratios for connected weak
+6. Enable graph tracing with `color_weak_ratio=1`, `depth_weak_ratio=1` and `max_gap_px=0` first. Lower ratios for connected weak
    evidence; enable short gaps last. Original observed masks stay unchanged. Orange
    inferred connections have no invented darkness/depth measurement. Lower corner-turn
    threshold splits gentler curves; junctions are connectivity nodes, not angle corners.
    Junction grouping defaults off and only adds hypotheses, preserving raw topology.
 
 [Difference details](BACKGROUND_TOLERANCES.md), [shadow assumptions](BOUNDARY_SHADOW.md),
-[topology options and ranges](BOUNDARY_TOPOLOGY.md). Real paired empty/current accuracy
-has not been established by reconstructed references; mask-assisted proxy evaluation
-contains target-information leakage. Use independent site captures and labels.
+[topology options and ranges](BOUNDARY_TOPOLOGY.md). Validate with independent
+empty/current site captures and labels; synthetic examples do not establish accuracy.
 
 ## Call-time controls and independent continuation
 
@@ -335,7 +333,7 @@ only documented controls to the corresponding general method, not arbitrary sett
   separation; larger rejects narrower spans. `max_height_delta_px=12` is allowed
   anchor height mismatch; larger admits less same-height geometry. `depth_jump_m=.1`
   limits connected depth jumps. `anchor_policy="local_observed"` requires observed
-  3x3 support and max_gap_px0; it does not invent cropped contact.
+  3x3 support and `max_gap_px=0`; it does not invent cropped contact.
 - Bridge `difference_mode="signed"` and sign describe actual subtraction.
   `positive_foreground` is the pre-masked/clipped contract; the uint16 wrapper chooses it.
   Supplied-mask mode bypasses difference thresholding and uses `mask_complete=False`
@@ -432,7 +430,7 @@ OverheadBoundaryDetector.detect(color, depth=None, *, color_order, registered_to
 invalid_values=())` returns signed float64 background-current in the declared matching input unit
 plus validity; both units must be explicitly given and equal (m or mm). `positive_difference_16uc1(depth, background, *,
 invalid_values=())` safely casts before subtraction/clipping and returns uint16
-positive difference plus validity. Background0 is missing: preserve that returned
+positive difference plus validity. Background depth zero is missing: preserve that returned
 validity instead of interpreting every clipped zero as measured background.
 `depth_pair_16uc1_to_meters(depth, difference, *, depth_scale_m=.001)` converts the
 pair to metres without modifying inputs; it cannot reconstruct lost background validity.
@@ -448,54 +446,12 @@ only reuse results from the same input/configuration.
 
 ## Debug API: arrays first, explicit PNG saving
 
-There are thirteen renderable spatial result types: `BridgeDrapeResult`, `GraspResult`,
-`ObjectOnlyGraspResult`, `LiftResult`, `PlaneFitResult`, `ColorAssistResult`,
-`GripperReference`, `ReferenceSegmentationResult`, `SurfaceResult`, `CornerResult`,
-`BoundaryResult`, `OuterContourResult` and `BoundaryProximityResult`. CameraIntrinsics/TablePlane and numeric tuples have no renderer;
-render their downstream result. Detection and rendering never write files.
-
-All except Corner/Boundary/OuterContour/BoundaryProximity use this signature:
-
-```python
-result.render_debug(color=None, *, color_order='RGB', depth=None,
-                    depth_scale_m=.001, mask_alpha=.35, panel=True, max_lines=32)
-result.save_debug(path, color=None, *, color_order='RGB', overwrite=False, **options)
-```
-
-`save_debug` options are the corresponding render options. Corner specializes it:
-
-```python
-corner.render_debug(color=None, *, color_order='RGB', depth=None,
-                    depth_scale_m=.001, mask_alpha=.2, show_contours=True,
-                    max_labels=12, panel=True)
-corner.save_debug(path, color=None, *, color_order='RGB', overwrite=False,
-                  depth=None, depth_scale_m=.001, **render_options)
-```
-
-Boundary adds labels while forwarding common render options:
-
-```python
-boundary.render_debug(color=None, *, color_order='RGB', depth=None,
-                      depth_scale_m=.001, topology_labels=False, **options)
-boundary.save_debug(path, color=None, *, color_order='RGB', overwrite=False, **options)
-```
-
-`render_debug` returns a uint8 HxWx3 image in the requested RGB/BGR order, with
-potentially larger panel/tile dimensions than the input. `save_debug` writes that
-image and returns the destination `pathlib.Path`, not the image array. Neither
-method mutates sources/results. Alpha,
-label counts, topology_labels, panel/max_lines and show_contours are **display-only**.
-Depth rendering uses percentile intensity, not metric height; invalid depth is magenta.
-Missing diagnostics are marked limited, not fabricated. Known masks/candidates remain
-renderable with diagnosticsFalse; provide source color/depth if no spatial arrays exist.
-
-Save only PNG to an existing non-symlink parent directory. Existing destinations are
-refused unless `overwrite=True`; explicit replacement is atomic and never follows an
-existing destination symlink into its target. Caller pose keys/labels can appear in
-panels; use nonsensitive identifiers. `to_dict()` gives scalar/graph summaries, not
-all image arrays. Inspect/export the specific arrays separately with NumPy; raw maps
-may contain NaN for unavailable pixels. Use `json.dumps(result.to_dict(), allow_nan=False)`
-for strict JSON and do not encode raw NaN arrays as JSON values.
+Use [Debug images and diagnostics](DEBUGGING.md) as the canonical reference for
+render/save signatures, RGB/BGR ordering, depth display, diagnostic arrays, strict
+JSON and overwrite behavior. Rendering options change display only; missing
+measurements are never fabricated. Feature-specific renderers are documented in
+[Corner](CORNER.md#render-and-save-debug-images), [Outline](OUTLINE.md#debug-and-examples)
+and [outer-proximity selection](BOUNDARY_PROXIMITY.md#returned-fields-and-debug-output).
 
 ### Complete in-memory Boundary example
 
@@ -543,10 +499,9 @@ synthetic inputs; their camera/reference values are illustrations, not site cali
 | Topology / seeded shadows / separate tolerances | `python examples/example_boundary_topology.py` / `python examples/example_boundary_shadow.py` / `python examples/example_background_tolerances.py` |
 
 The installed `depth-image-lens --help` describes the **Bridge** NPY/NPZ+JSON command;
-it is not a universal CLI for all detectors. See [CLI/input details](DIAGNOSTICS.md).
-Dataset-specific tuning runners, scene splits, numerical searches, real-data guides
-and galleries are intentionally outside Git. They are not runtime dependencies or
-additional public algorithms. No dataset accuracy is implied by these examples.
+it is not a universal CLI for all detectors. See [CLI/input details](DEBUGGING.md#shared-cli-output).
+These examples require no external datasets and do not establish field accuracy.
+See [repository scope](README.md#repository-scope) for publication boundaries.
 
 ## OuterContourDetector: ordered external intervals
 
@@ -574,9 +529,10 @@ returns an OuterContourResult. Missing/bad optional metric inputs preserve pixel
 geometry. Explicit domain/mask contract errors remain fatal. No target length is
 used to construct predictions. `query_edge_length(target_length, *, unit='px',
 tolerance=None, mode='match', min_support_px=20., max_line_error_px=None,
-max_metric_line_error_m=.005, require_corner_endpoints=False)` is a separate result query. ToleranceNone means
-5px or0.005m; max_line_error_pxNone inherits the detector. The separate query-only
-3D line-error limit defaults to0.005m; image-straight does not imply straight in3D.
+max_metric_line_error_m=.005, require_corner_endpoints=False)` is a separate result query. `tolerance=None` means
+5 px or 0.005 m; `max_line_error_px=None` inherits the detector. The separate
+query-only 3D line-error limit defaults to 0.005 m; image-straight does not imply
+straight in 3D.
 See the detailed guide
 for match versus at_least and the limits of exposed-material-edge interpretation.
 

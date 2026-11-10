@@ -1,20 +1,13 @@
-# RGB-Dマスクと摘み候補の調整・debug手順
+# RGB-D mask and pick-candidate tuning
 
-対象APIは `RGBDBackgroundSegmenter` と `OverheadPickCandidateDetector` です。
-[マスクの仕様](RGBD_BACKGROUND.md)／[候補の仕様](PICK_CANDIDATES.md)／
-[全APIの調整索引](TUNING.md)も参照してください。
-ここで扱うのは、入力からマスク・幾何候補を得るための設定です。
-画素余裕はグリッパー寸法ではなく、布の物性・指先の進入・把持成功は判定しません。
+This guide covers `RGBDBackgroundSegmenter` and `OverheadPickCandidateDetector`.
+See the [mask contract](RGBD_BACKGROUND.md), [pick contract](PICK_CANDIDATES.md),
+and [parameter index](TUNING.md). Pixel clearance is not a gripper dimension;
+these APIs do not determine material properties, finger access, or grasp success.
 
-## 撮影ごとに設定し直す前に
+## Run the diagnostic workflow
 
-距離・姿勢・照明・厚みの変動によって、全撮影に共通する深度帯や色閾値が存在しない
-場合があります。80 mmの上限や2画素の成長は実機の推奨値ではありません。
-[固定設定の成立条件と合成反例](RGBD_CAPTURE_STABILITY.md)を先に確認してください。
-
-## まず動かす
-
-OpenCVを含む環境で、リポジトリのルートから実行します。
+From the repository root with the optional OpenCV dependency installed:
 
 ```bash
 python -m pip install -e '.[debug]'
@@ -22,23 +15,24 @@ mkdir -p debug-output
 python examples/example_rgbd_pick_tuning.py --output-dir debug-output/run-01
 ```
 
-入力指定なしでは、穴、穴内の別物体、深度スパイク、欠損を含む合成画像を処理します。
-実データの性能を測る例ではありません。出力先は**新しいディレクトリ**にします。
-既存ファイルを上書きしません。例の引数一覧は `--help` で確認できます。
+Without an input file, this processes a generated scene containing a hole, a
+separate object inside the hole, a depth spike and missing depth. It is not a
+real-image accuracy evaluation. The output directory must be new and its parent
+must exist; existing files are not overwritten. Use `--help` for arguments.
 
-| 出力 | 確認すること |
+| Output | Purpose |
 | --- | --- |
-| `parameters.json` | 両クラスの有効な全constructor設定。次の実行の `--config` にそのまま利用可能 |
-| `summary.json` | 単位、色順、選択contour ID、状態、最良代表点、各段階の画素数 |
-| `segmentation.png` / `segmentation.json` | 前景・不確実性・欠損・色と深度の根拠、参照チェック結果 |
-| `outline.png` / `outline.json` | 輪郭ID・穴。意図した物体を選んでいるか |
-| `pick.png` / `pick.json` | 選択成分、支持領域、候補領域、全代表点と最良点、除外理由 |
-| `pixel.json` | 指定画素、指定がなければ最良代表点のマスク値・スコア・支持率等。点がなければnull |
-| `arrays.npz` | `seg_...` / `pick_...` の結果配列、`seg_diag_...` / `pick_diag_...` の診断配列 |
+| `parameters.json` | All effective constructor settings; reusable as `--config` |
+| `summary.json` | Units, color order, selected contour ID, status, best point and stage counts |
+| `segmentation.png` / `.json` | Foreground, uncertainty, missingness, color/depth evidence and reference check |
+| `outline.png` / `.json` | Contour IDs and holes; check which object is selected |
+| `pick.png` / `.json` | Selected component, support, candidate regions, representative points and rejection reasons |
+| `pixel.json` | Masks, scores and support at the requested pixel, or the best point; null if neither exists |
+| `arrays.npz` | Result arrays prefixed `seg_` / `pick_`, diagnostics prefixed `seg_diag_` / `pick_diag_` |
 
-設定を1項目ずつ変え、同じ入力で別出力先に再実行します。JSONのトップレベルは
-`segmenter` と `pick` のみ。省略した設定は実装の既定値を使います。
-例えば次は変更の書式であり、推奨される実機値ではありません。
+Change one setting at a time and rerun the same input into a new directory.
+Config JSON accepts only `segmenter` and `pick` objects; omitted settings use
+implementation defaults. This is a syntax example, not a deployment preset:
 
 ```json
 {
@@ -47,27 +41,27 @@ python examples/example_rgbd_pick_tuning.py --output-dir debug-output/run-01
 }
 ```
 
-上のJSONを `tuning.json` として保存した場合:
+Save it as `tuning.json`, then run:
 
 ```bash
 python examples/example_rgbd_pick_tuning.py --config tuning.json --output-dir debug-output/run-02
 python examples/example_rgbd_pick_tuning.py --inspect-x 85 --inspect-y 75 --output-dir debug-output/spike
 ```
 
-後者は合成シーンの孤立最小値を検査します。候補なしの実画像でも、`--inspect-x` と
-`--inspect-y` を一緒に指定すると、その画素の `pixel.json` を取得できます。
-原画像の配列添字は `[y, x]`、APIの点は `[x, y]` です。
+The second command inspects the isolated near-depth spike. Supply both inspection
+coordinates to inspect any pixel, even when no candidate exists. Array indices
+are `[y, x]`; API points are `[x, y]`.
 
-## 手元の画像を渡す
+## Use recorded inputs
 
-4配列を同じ格子へ登録してから保存します。以下は手元の変数を使う例です。
+Register all four arrays to the same grid before saving them:
 
 ```python
 import numpy as np
 np.savez_compressed(
     'pair.npz', color=current_color, depth=current_depth,
     background_color=empty_color, background_depth=empty_depth,
-    # 必要な場合は同じHxWのboolマスクも指定:
+    # Optional same-grid bool masks:
     # depth_valid_mask=current_valid,
     # background_depth_valid_mask=empty_valid,
     # background_check_mask=known_unchanged_background,
@@ -79,177 +73,187 @@ python examples/example_rgbd_pick_tuning.py --input pair.npz --color-order RGB -
 python examples/example_rgbd_pick_tuning.py --input pair.npz --color-order RGB --depth-scale-m 0.001 --config tuning.json --contour-id 0 --output-dir debug-output/real-02
 ```
 
-`--contour-id 0` は例です。実際のIDを最初の `outline.json` から選びます。
-省略時は最大の外周ポリゴン面積を選択し、同面積なら小さいIDを優先します。
-穴の面積はこの最大判定に含まれます。別物体が最大ならIDを明示してください。
-`outline.component_mask(id)` は元マスクの可視8近傍連結成分を取り出し、穴を埋めません。
-接触した物体は同じ成分になり得ます。マスクを変更したらoutlineも作り直します。
+Choose the actual ID from `outline.json`; 0 is only an example. Without an ID,
+the largest outer polygon area wins, with the smallest ID breaking ties. This
+area includes holes. `outline.component_mask(id)` then selects the original
+visible 8-connected component without filling holes. Touching objects may share
+a component. Recompute the outline whenever its input mask changes.
 
-実入力では `--color-order` と `--depth-scale-m` の明示が必須です。NPZはpickleを許可しません。
-登録済みという宣言はexampleがAPIに渡しますが、登録処理自体は行いません。
-合成例の色順／単位はRGB、0.001 m/count固定です。
+Real inputs require explicit `--color-order` and `--depth-scale-m`. The example
+declares registration to the API but does not perform it. NPZ loading disables
+pickle. The generated scene uses fixed RGB and .001 metres/count.
 
-## 入力確認と調整の順序
+## Check inputs before tuning
 
-1. **対応と単位**: 両colorはuint8 HxWx3、両depthは数値HxW。4画像の画素位置、
-   解像度、crop、歪み補正を合わせます。カメラ・背景を固定し、対象なしの独立参照を用意します。
-   pickは真上から見下ろす前提。depthは光軸Zで、距離レンジではありません。
-   1 count=1 mmならscale=.001、floatのmetresなら1。dtypeから推定しません。
-2. **欠損と範囲**: 0以下・NaN・Inf・sentinel・無効maskを確認。欠損を背景差0へ置換しません。
-   補間した画素も必要に応じ無効にします。処理対象は `work_roi` で限定し、
-   参照チェックROIは物体・影・動く背景を避けた「変わっていない」と分かる領域に置きます。
-3. **マスクの根拠**: 色前景と深度前景を別々に確認。静止した空背景の繰り返し測定から
-   depth差のノイズ幅を調べ、`depth_threshold_m` を決めます。次にchroma/lumaを調整します。
-   参照を現在画像と同一にすると差が消えますが、それは正しい背景の検証ではありません。
-4. **成分と不確実性**: mask、outlineのIDと穴、`seg.uncertain_mask` を点検します。
-   `observed_mask` は観測の有無、`uncertain_mask` は判断の曖昧さで、別の情報です。
-5. **pickの入口**: `object_pixels → search_pixels → pair_valid_pixels / supported_pixels`
-   とマスクを見ます。背景差の高さ条件より先に、単位・欠損・支持・余裕の不足を解消します。
-   `pair_valid_pixels` はsearch全体の部分集合とは限らず、上記は単純な減算列ではありません。
-6. **高さ・広さ・代表点**: 支持が得られてからelevation、area、radius、最後にdepth bandを調整。
-   `rejected_regions`、各代表点の深度・支持率・余裕を比較します。未知を減らすだけでは改善とは言えません。
+1. **Registration and units:** colors must be uint8 HxWx3; depths must be real
+   numeric HxW, with H and W at least 2. Match pixel coordinates, resolution,
+   crop and rectification across all four images. Use a fixed camera/background
+   and an independent empty reference. Pick detection assumes an overhead view.
+   Depth is optical-axis Z, not ray range. Use .001 for mm/count or 1 for metres,
+   including floating-point arrays; units are never inferred from dtype.
+2. **Missingness and domain:** inspect nonpositive, nonfinite and sentinel depth
+   and validity masks. Do not replace missingness with zero difference. Mark
+   interpolated or unreliable pixels invalid. Restrict selection with `work_roi`.
+   A reference-check ROI must be known unchanged background, excluding objects,
+   shadows and moving surfaces.
+3. **Evidence:** inspect color and depth foreground independently. Estimate depth
+   difference noise from repeated empty captures before setting
+   `depth_threshold_m`, then tune chroma/luma. Using the current image as its own
+   reference hides differences; it does not validate a background model.
+4. **Components and uncertainty:** inspect mask, contour IDs, holes and
+   `seg.uncertain_mask`. Availability and classification uncertainty are distinct.
+5. **Pick support:** inspect `object_pixels`, `search_pixels`, `pair_valid_pixels`
+   and `supported_pixels` with their masks. These are not a simple subtraction
+   sequence: pair-valid pixels need not be a subset of the search domain.
+   Resolve units, missingness, support and clearance before lowering elevation.
+6. **Elevation, size, ranking:** tune elevation, area and radius only after
+   support exists; tune the nearest-depth band last. Compare `rejected_regions`,
+   depth, support and clearance. Fewer unknown pixels alone is not improvement.
 
-空背景の繰り返し、物体あり、影・照明変化、欠損の入力を同じ設定で比較し、
-正例だけに合う調整を避けます。resize時は画素長／窓／面積を見直します。
-センサ単位としてのm閾値はresizeで変わりませんが、広い画素間隔で同じ窓を取ると
-傾斜面のZ変化が増え、支持条件が厳しくなることがあります。
+Compare empty, target-present, shadow/lighting-change and missing-data cases with
+one fixed configuration. On resizing, review pixel lengths, windows and areas.
+Metric sensor thresholds do not change merely because of resizing, but a window
+covering wider-spaced pixels may span larger depth changes on slopes.
 
-## RGBDBackgroundSegmenter: 全constructor設定
+## Segmenter settings
 
-float欄は有限でfloatに変換可能なscalar（bool不可、JSONでは数値を使用）です。
-int欄はPythonのint（bool不可）、bool欄はTrue/Falseです。許容範囲外はValueError。
-増減の効果はマスクの意味が正しく保たれる範囲での目安であり、精度の単調な改善ではありません。
+Numbers must be finite scalar values convertible to float, excluding bool.
+Integer settings require Python int, excluding bool; boolean settings require
+True/False. Invalid values raise `ValueError`. Adjustment directions below do
+not promise monotonic improvements in accuracy.
 
-| 名前 | 既定値 | 型・単位・許容範囲 | 変更の効果・関連設定 |
-| --- | --- | --- | --- |
-| `background_chroma_tolerance` | 20.0 | float、OpenCV 8-bit Lab色差、>0 | 上げると色味差に鈍感、下げると微妙な色差と色ノイズを拾う。lumaと楕円判定を構成 |
-| `background_luma_tolerance` | 60.0 | float、encoded Lab明るさ差、>0 | 上げると影・明るさ変化を拾いにくいが明度だけ違う物体も欠ける。色味の差はchromaで調整 |
-| `background_score_margin` | 0.2 | float、楕円半径の無次元幅、0..1 | 上げると半径1付近のuncertainが広がる。単独の色前景判定は不変。evidenceでは色による確認／抑制とchromaのみ採用にも作用し、最終選択を変える |
-| `depth_threshold_m` | 0.005 | float、m、>0 | 上げると小さいdepth差を除外、下げると薄い物体とノイズを拾う。正負両方に使用し、遠方変化は色候補を抑止 |
-| `depth_margin_m` | 0.001 | float、m、0以上かつdepth_threshold_m未満 | ±閾値付近のuncertain幅。上げてもdepth前景そのものは変わらないが後段pickへの除外は増え得る |
-| `fusion_mode` | 'union' | str、'union' / 'depth_required' / 'evidence' / 'color_seeded' | unionは色またはdepthの候補。depth_requiredはdepthのみ。evidenceは色確認と深度の強さ・局所支持を照合。color_seededは厳格な色seedから局所的に成長。後述の手順参照 |
-| `missing_depth_policy` | 'color' | str、'color' / 'unknown' | union/evidence/color_seeded時、colorは欠損depthでも各方式の色候補をuncertain付きで残す。unknownは除外して未観測扱い。depth_requiredではどちらもdepth必須 |
-| `min_object_area` | 1 | int、8近傍成分の画素数、1以上 | 上げると小成分を除去してuncertainにする。細片も失う。穴埋めや接触成分の分離にはならない |
-| `background_compensate` | False | bool | Trueはcheck領域のLab差medianで全体offset補正。25画素以上の有効check領域が必要。局所的影・位置ずれは補正しない |
-| `background_check_p95` | 20.0 | float、重みなしencoded Lab距離、>0 | check領域の補正後p95の上限。下げると色参照を棄却しやすい。上げる前にROI・照明・登録を確認。check未指定なら作用しない |
-| `background_max_offset` | 40.0 | float、Lab offsetベクトルのノルム、>0 | 補正時のoffset上限。上げると大きな補正を許すが参照不適合を通しやすい。compensate=Falseでは作用しない |
-| `strong_depth_ratio` | 3.0 | float、無次元、1以上 | evidence専用。強いdepth差の基準はdepth_threshold_m×倍率（既定15 mm）。上げるとdepthのみ採用が厳しくなる。下げると浅い同色物体とdepth誤差を通す |
-| `depth_support_radius_px` | 1 | int、処理画素、1..5 | evidenceおよびcolor_seededの追加画素用。近傍一辺2r+1。上げると広い範囲を見るが細形状を失いやすい。分母も変わるため効果は単調ではない |
-| `depth_support_fraction` | 0.25 | float、割合、0より大きく1以下 | evidenceのdepthのみ採用／color_seededの追加画素用。上げるほど必要な近傍支持が増える。下げると細い部分を残すが孤立ノイズへの抵抗が弱まる |
-| `depth_support_tolerance_m` | 0.003 | float、m、0以上 | evidenceおよびcolor_seededの追加画素用。近傍と中心の背景depth差dZの一致幅。上げると傾斜やノイズを許す。0は浮動小数点の完全一致 |
-
-色の判定は `score=(dC/Tc)^2+(dL/Tl)^2 > 1`、不確実性marginはscoreそのものではなく
-`sqrt(score)` の1からの距離に適用されます。これは確率・標準化されたDelta Eではありません。
-深度差 `dZ=empty-current` が `T` より大きいと前景、`-T` より小さいと遠方変化です。
-等号では前景にしません。色check棄却時もdepth評価は継続します。evidenceでは強く局所支持されたdepthだけを採用し、それ以外のdepth候補は保留します。border色の推測へ切り替えません。
-
-## OverheadPickCandidateDetector: 全constructor設定
-
-float/intの型規則は上と同じです。カラーは前段のマスクと不確実性に使い、pickはdepthで計算します。
-
-| 名前 | 既定値 | 型・単位・許容範囲 | 変更の効果・関連設定 |
-| --- | --- | --- | --- |
-| `min_elevation_m` | 0.01 | float、m、>0 | 上げると背景からより手前の領域だけ。中心と局所medianの両方に、reference_error_mを引いた後で適用 |
-| `reference_error_m` | 0.002 | float、m、0以上 | 参照差の誤差余裕。上げると必要な差が増える。実効下限はmin_elevation_m+reference_error_m。センサ誤差を自動推定しない |
-| `boundary_guard_px` | 3.0 | float、画素中心間距離、0以上 | 上げると輪郭・穴・欠損・uncertain・画像端から離す。細い物体や小領域のsearchが消えることがある |
-| `local_radius_px` | 2 | int、画素、1..10 | 窓幅は2r+1。上げると広い支持が必要になり、小スパイクを抑える一方、傾斜・しわ・境界をまたぐ。下げると局所特徴とノイズを拾いやすい |
-| `min_support_fraction` | 0.8 | float、窓全体に対する割合、0.5より大きく1以下 | 上げると欠損／不一致に厳しくなる。窓外の別成分・無効点も分母から除かない。中心自体の一致は別途必須 |
-| `local_depth_tolerance_m` | 0.003 | float、m、>0 | 現在Zと背景差の両medianに対する許容。上げるとノイズや傾斜に寛容だがスパイクを通しやすい。windowと一緒に検討 |
-| `min_region_area` | 25 | int、候補成分の画素数、1以上 | 上げると小さな隆起／ノイズ成分を除く。前段min_object_areaとは別で、支持と高さを通過した領域に適用 |
-| `min_region_radius_px` | 2.0 | float、候補領域内の画素中心間距離、0以上 | 上げると代表点に広い候補内部を要求。面積が大きい細長領域も除去できる。グリッパー半径のm換算ではない |
-| `nearest_depth_band_m` | 0.003 | float、m、0以上 | 領域内の最も近い支持付きlocal Zから許す幅。0は最小local Zだけ。上げると少し奥でも余裕の大きい点を選べる。代表点の深度と領域間順位が変わり得る |
-
-`boundary_guard_px` と `min_region_radius_px` は距離が指定値を**超える**点を使います。
-前景の端画素は最近接の除外画素中心から距離1です。サブピクセル境界までの距離ではありません。
-窓は同じ成分内の有効点だけを集計しますが、支持率の分母は `(2r+1)^2` のままです。
-medianに現在Z・背景差の両方が一致する隣接点を数え、中心自身の一致も要求します。
-
-前段で物体に選ばれない画素やpickへ渡したuncertain画素は、pickの高さ閾値を下げても復活しません。
-領域の適格性は背景差で判定し、領域間の順位は代表点の局所**現在Zが小さい順**です。
-同じZなら面積が大きい順、次にy/x。領域内ではdepth bandを満たす点から余裕が最大の点、
-同じ余裕なら上／左を選びます。最大の背景差を選ぶ処理とは異なります。
-
-## detect時の引数・マスク
-
-| 引数 | 対象／既定値 | 型・役割 |
+| Setting | Default and range | Adjustment |
 | --- | --- | --- |
-| `color`, `depth`, `background_color`, `background_depth` | seg必須 | 同じH,W（2以上）。両colorはuint8 HxWx3、両depthは実数の数値HxW。光軸Z・共通scale |
-| `depth`, `outline`, `background_depth` | pick必須 | depthペアと新しいOuterContourResult。マスクと同じ格子 |
-| `color_order` | seg必須 | 'RGB' / 'BGR'を両colorに適用 |
-| `depth_scale_m` | 両方必須 | 正の有限数、m/count。float配列でも必要 |
-| `registered_to_depth` / `registered_to_mask` | 各False | 実行にはそれぞれ明示Trueが必要。登録を行うswitchではない |
-| `color_valid_mask`, `background_color_valid_mask` | seg、None | bool HxW。Noneは全color画素を利用可能とする。色の黒0を欠損と自動解釈しない |
-| `depth_valid_mask` | 両方、None | bool HxW。Noneでも非正・非有限・sentinel depthは無効 |
-| `background_depth_valid_mask` / `background_valid_mask` | seg / pick、None | bool HxW。参照depthの有効性。名称の違いに注意 |
-| `work_roi` | seg、None | bool HxW、Noneは全画面。外側のobject/observed/uncertainはFalse（除外） |
-| `background_check_mask` | seg、None | bool HxWの既知不変背景。指定時／補正時は両colorで有効な点25以上。work_roi外でも可。参照が空であることを保証しない |
-| `contour_id` | pick、None | int ID（bool不可）。Noneは最大外周面積。明示不明IDはValueError、空outlineかつNoneはno_object |
-| `segmentation_uncertain_mask` | pick、None | bool HxW。Trueを支持と選択から除外。Noneは供給maskを信用する。欠損の代替にはしない |
-| `invalid_values` | 両方、() | 有限実数1D列。両depthに同じsentinelを元のcount単位で適用 |
-| `diagnostics` | 両方、False | bool。Trueで密な診断配列を保存。pickの代表点配列はFalseでも保持 |
+| `background_chroma_tolerance` | 20; >0, encoded 8-bit Lab | Increase to ignore more chroma variation; decrease to detect weak differences and more color noise |
+| `background_luma_tolerance` | 60; >0, encoded Lab | Increase to ignore brightness/shadows, at the cost of brightness-only targets |
+| `background_score_margin` | .2; 0..1 | Widen uncertainty around ellipse radius 1; also changes evidence confirmation/background agreement and strict chroma seeds |
+| `depth_threshold_m` | .005; >0 metres | Increase to reject smaller changes; decrease to admit thinner objects and noise. Also sets the negative farther-change threshold |
+| `depth_margin_m` | .001; >=0 and < depth threshold | Widen threshold uncertainty without changing raw depth foreground; may exclude more downstream pick pixels |
+| `fusion_mode` | `'union'`; `'union'`, `'depth_required'`, `'evidence'`, `'color_seeded'` | Choose evidence policy, not a confidence level; see the API's fusion rules |
+| `missing_depth_policy` | `'color'`; `'color'` or `'unknown'` | Keep the chosen mode's color candidates with uncertainty, or require depth. Depth-required always requires depth |
+| `min_object_area` | 1; int >=1 pixels | Remove smaller 8-connected components with uncertainty; does not fill holes or split touching objects |
+| `background_compensate` | False; bool | Apply global median Lab offset from at least 25 valid known-background check pixels; does not fix local shadows or registration |
+| `background_check_p95` | 20; >0, unweighted encoded-Lab distance | Increase to accept larger corrected check residuals; inspect ROI, lighting and registration first. Inactive without a check region |
+| `background_max_offset` | 40; >0, Lab vector norm | Increase to allow larger global correction; may hide bad references. Inactive without compensation |
+| `strong_depth_ratio` | 3; >=1 | Evidence only: increase to require stronger depth-only changes; default strong threshold is 15 mm |
+| `depth_support_radius_px` | 1; int 1..5 | Widen the square neighborhood; may lose narrow shapes. Changing the denominator makes effects nonmonotonic |
+| `depth_support_fraction` | .25; (0,1] | Require more agreeing neighbors for evidence depth-only selection and seeded growth; lower values preserve thin detail but admit noise |
+| `depth_support_tolerance_m` | .003; >=0 metres | Widen agreement in neighbor/center dZ to tolerate slopes and noise; zero means exact floating-point equality |
+| `color_relaxation_ratio` | .5; (0,1] | Seeded growth only: lower values admit weaker color changes; seed threshold is unchanged |
+| `color_growth_max_steps` | 2; int 0..20 | Seeded growth only: maximum 8-neighbor steps from an initial seed; zero returns seeds only |
 
-exampleのNPZは上記seg用mask名と `invalid_values` を追加できます。
-pickには `seg.depth_valid_mask`（同じ両depthのpair有効性を含む）と
-`seg.uncertain_mask` を渡します。別の参照へ変更したら検出全体を再計算してください。
+Color foreground uses `score=(dC/Tc)^2+(dL/Tl)^2 > 1`; the uncertainty margin
+applies to `sqrt(score)`, not score. This is neither a probability nor standard
+Delta E. Depth foreground requires `dZ=empty-current > T`; farther change is
+`dZ < -T`. Equality does not pass. A failed color check does not stop depth
+evaluation or trigger border-color guesses. Evidence mode then requires strong,
+locally supported depth; color-seeded mode cannot produce seeds.
 
-## debug APIとパネルの読み方
+## Pick settings
+
+The same numeric type rules apply. See [selection rules](PICK_CANDIDATES.md#selection-rules-and-the-two-depth-roles)
+for the exact support and ranking contracts.
+
+| Setting | Default and range | Adjustment |
+| --- | --- | --- |
+| `min_elevation_m` | .01; >0 metres | Require greater center and local-median reference separation after subtracting reference error |
+| `reference_error_m` | .002; >=0 metres | Increase the assumed error allowance; effective separation minimum is elevation plus error. Error is not estimated automatically |
+| `boundary_guard_px` | 3; >=0 pixels | Increase clearance from outline, holes, missingness, uncertainty and image border; may remove the entire search interior |
+| `local_radius_px` | 2; int 1..10 | Widen the `(2r+1)` square; suppress isolated spikes but mix more slopes, creases and boundaries |
+| `min_support_fraction` | .8; (.5,1] | Require more of the full square to agree with both medians; missing/outside-component samples remain in the denominator |
+| `local_depth_tolerance_m` | .003; >0 metres | Increase tolerance around current-Z and separation medians; admits slopes/noise and potentially spikes |
+| `min_region_area` | 25; int >=1 pixels | Reject small supported elevated regions; separate from upstream object-area filtering |
+| `min_region_radius_px` | 2; >=0 pixels | Require wider candidate interiors for representatives, including in large narrow regions; not a gripper radius |
+| `nearest_depth_band_m` | .003; >=0 metres | Allow representatives farther than the minimum supported local Z to gain clearance; zero allows only the minimum |
+
+Guard and radius tests use strict `>` distance to excluded pixel centers. An edge
+foreground pixel has distance 1; these are not subpixel edge distances. Support
+uses only trusted samples in the selected component, but divides by the entire
+square. The center must also agree with both medians. Lowering elevation cannot
+restore upstream-excluded or uncertain pixels. Regions are eligible by reference
+separation but ranked by representative local current Z, then larger area, then
+y/x. Within a region, clearance wins among depth-band-qualified points, with
+topmost/leftmost tie-breaking. This is not maximum-difference ranking.
+
+## Detection masks and optional inputs
+
+Both detectors require positive finite `depth_scale_m`, also for float arrays,
+and explicit registration (`registered_to_depth=True` or
+`registered_to_mask=True`). Segmentation requires `color_order='RGB'` or `'BGR'`
+for both colors. Registration flags are attestations, not alignment operations.
+
+| Input | Contract |
+| --- | --- |
+| `color_valid_mask`, `background_color_valid_mask` | Segmenter bool HxW; omitted means all color available. Black does not automatically mean missing |
+| `depth_valid_mask` | Both APIs, bool HxW; automatic invalid-depth checks still apply when omitted |
+| `background_depth_valid_mask` / `background_valid_mask` | Segmenter / pick reference-depth validity; note the different names |
+| `work_roi` | Segmenter bool HxW; omitted means full image. Outside it object, observed and uncertain masks are False |
+| `background_check_mask` | Segmenter known-unchanged bool HxW; may lie outside ROI. At least 25 jointly valid color pixels when supplied or compensating; does not prove an empty reference |
+| `contour_id` | Pick int ID, not bool; default largest outer polygon. Unknown explicit IDs raise ValueError; empty outline with no ID gives no_object |
+| `segmentation_uncertain_mask` | Pick bool HxW; True excludes both support and selection. Omitted means trust the supplied object mask; not a sensor-validity substitute |
+| `invalid_values` | Finite real 1D sequence, default empty; applies the same sentinels to both depths in original count units |
+| `diagnostics` | Bool, default False; retain dense diagnostic arrays. Pick point arrays are always retained |
+
+The example NPZ accepts the segmenter's optional masks and `invalid_values`.
+It passes `seg.depth_valid_mask` (pair validity) and `seg.uncertain_mask` to pick.
+Recompute the whole pipeline if the reference changes.
+
+## Read debug output
 
 ```python
 seg = segmenter.detect(color, depth, background_color=empty_color,
     background_depth=empty_depth, color_order='RGB', depth_scale_m=.001,
     registered_to_depth=True, diagnostics=True)
-outline = OuterContourDetector().detect(seg.object_mask, observed_mask=seg.outline_observed_mask)
+outline = OuterContourDetector().detect(
+    seg.object_mask, observed_mask=seg.outline_observed_mask)
 pick = picker.detect(depth, outline, background_depth=empty_depth,
     depth_scale_m=.001, registered_to_mask=True,
     depth_valid_mask=seg.depth_valid_mask,
     segmentation_uncertain_mask=seg.uncertain_mask, diagnostics=True)
-image = seg.render_debug(color, color_order='RGB')  # uint8 RGB ndarray
+image = seg.render_debug(color, color_order='RGB')
 seg.save_debug('segmentation.png', color, color_order='RGB')
 pick.save_debug('pick.png', color, color_order='RGB')
-# 親ディレクトリは必要。既存PNGは既定で上書き拒否。
-# 意図的に更新する場合だけ save_debug(..., overwrite=True)。
 ```
 
-共通表示設定は `mask_alpha=.35`（有限0..1）、`panel=True`（bool）、
-`max_lines=32`（int 1..100）。colorなしなら `depth=...` と
-`depth_scale_m=...` で深度をpercentile表示できます。これは表示用で閾値の再調整ではありません。
-`color_order` は描画入力と返却配列の順序にも適用します。`save_debug` はPNGへの色順変換を行います。
-各maskは別パネルで重ね合わせます。縮小表示される場合も計算は元の格子です。
-共通パネルは最大13タイルのため全診断maskが見えるとは限りません。省略表示を確認し、
-必要な配列は `arrays.npz` または `diagnostics` で調べます。`panel=False` でも
-segの追加数値heatmapは `diagnostics=True` のとき表示されます。
+The parent directory must exist. Existing PNGs are rejected unless explicitly
+using `overwrite=True`. Common display settings are `mask_alpha=.35` (finite
+0..1), `panel=True` (bool), and `max_lines=32` (int 1..100). Without color, provide
+`depth` and `depth_scale_m` for percentile-scaled visualization; this changes
+only display. `color_order` applies to rendering input and output; PNG saving
+converts the order as needed. Computation uses the original grid even if display
+is reduced. Generic panels show at most 13 tiles; inspect omitted arrays directly.
+Segmenter diagnostic heatmaps still appear with `panel=False`.
 
-| segの結果・診断 | 読み方 |
-| --- | --- |
-| `object_mask` | 融合・面積フィルタ後の候補。uncertainと重なる場合がある |
-| `observed_mask` | 選んだfusion/missing policyで根拠を利用できる範囲。物体の確実性ではない |
-| `uncertain_mask` | 欠けた根拠、色のみ、閾値付近、clipping、遠方変化等。maskを反転してoutlineの観測範囲にすると人工的な穴を作る |
-| `color_foreground_mask`, `depth_foreground_mask` | 各根拠の前景。色だけか、同色でもdepthが支えるかを比較 |
-| `depth_valid_mask`, `conflict_mask` | 両depthの有効域、色前景かつ背景より遠くなった矛盾域 |
-| `background_chroma_distance`, `background_luma_distance` | encoded LabのdC/dL。閾値に対してどちらが強いか |
-| `background_combined_score` | 楕円score。1より大きいと色前景。heatmapは0..4表示でそれ以上は色が飽和、数値は残る |
-| `depth_difference_m` | empty-currentのm差。heatmapは±2T、範囲外は表示が飽和。欠損NaNはmagenta |
-| `background_distance` | 補正後の重みなしLab距離。楕円scoreとは別であり選択閾値と混同しない |
-| `background_valid_mask`, `background_check_mask`, `color_usable_mask` | 両colorで利用可能、宣言したcheck、ROIと参照棄却を反映した実利用領域 |
-| `background_photometric_clipped_mask`, `background_score_saturated_mask` | 色の極端値（各入力RGBの<=1または>=254）と数値score飽和。精度の高い根拠とはしない |
-| `farther_mask`, `depth_threshold_margin_mask`, `color_only_mask`, `filtered_mask`, `work_roi` | 遠方変化、depth閾値付近、depth前景でない色前景、面積除去、処理範囲 |
+- Inspect `stages['color_reference']` and `color_usable_mask` first: numeric color
+  maps remain available even when the reference is rejected.
+- `background_chroma_distance` / `background_luma_distance` are dC/dL.
+  `background_combined_score` is the ellipse score (heatmap saturates above 4).
+  `background_distance` is a separate unweighted, corrected Lab distance.
+- `depth_difference_m` is signed empty-current separation; its heatmap saturates
+  outside ±2T, with missing NaN in magenta. Numeric values are retained.
+- `background_valid_mask`, `background_check_mask`, and `color_usable_mask`
+  distinguish jointly available color, declared check region and usable evidence.
+  `background_photometric_clipped_mask` flags RGB values <=1 or >=254;
+  `background_score_saturated_mask` flags numeric saturation, not high certainty.
+- `color_foreground_mask` / `depth_foreground_mask` separate evidence sources.
+  `conflict_mask` is color foreground at farther depth. `farther_mask`,
+  `depth_threshold_margin_mask`, `color_only_mask`, `filtered_mask` and `work_roi`
+  distinguish rejection, uncertainty and processing-domain effects.
+- `object_mask` and `uncertain_mask` can overlap. Do not use the inverse of all
+  uncertainty as outline availability: this creates artificial cuts. Use
+  `outline_observed_mask`, and propagate uncertainty separately to pick.
+- For pick, inspect selected `object_mask`, then `excluded_mask`, `unknown_mask`,
+  `supported_mask`, `eligible_elevation_mask` and `candidate_mask`. Support alone
+  does not establish elevation/area/width. Not every candidate-mask pixel meets
+  the representative-point radius condition. Excluded and unknown may overlap.
+- Pick `pair_valid_mask` includes component/uncertainty restrictions;
+  `clearance_px` measures distance to excluded centers. `local_depth_m` and
+  `local_separation_m` are medians, not filled measurements. `support_fraction=0`
+  can mean unevaluated: also inspect NaN local maps and masks.
+- `candidate_points_xy` and `selected_point_xy` show all representatives and the
+  best point. Pick numeric maps are not automatically rendered as heatmaps.
 
-数値比較mapは参照checkが棄却されても残ります。`stages['color_reference']` と
-`color_usable_mask` を先に確認します。scoreの大きさは物理的な確信度ではありません。
-
-| pickの結果・診断 | 読み方 |
-| --- | --- |
-| `object_mask` | 指定された1成分。穴や別物体が混ざっていないか最初に見る |
-| `excluded_mask`, `unknown_mask` | 信用できる内部から除外された点と、判断できない点。uncertain除外では両方にTrueがあり得る |
-| `supported_mask` | 中心と周囲が両medianに整合。支持のみで高さ・面積・幅はまだ保証しない |
-| `eligible_elevation_mask`, `candidate_mask` | 支持＋高さを満たす点、さらに面積と幅を満たす領域。candidate_maskの全画素が代表点の幅条件を満たすわけではない |
-| `candidate_points_xy`, `selected_point_xy` | 全代表点と最良代表点。それぞれ別パネル。空配列なら候補なし |
-| `pair_valid_mask`, `clearance_px` | 指定成分・不確実性も反映した両depth有効域と、最近接除外画素中心までの距離 |
-| `local_depth_m`, `local_separation_m`, `depth_difference_m` | 現在Zの局所median、背景差の局所median、測定背景差。局所medianは穴埋めした新測定値ではない |
-| `support_fraction` | 窓全体のうち両medianに整合する割合。未評価中心も0なので、0だけで実測支持ゼロと判断せずlocal mapのNaNやmaskを併読 |
-
-pickの標準画像はmaskと点のoverlayで、これらの数値mapのheatmapは自動追加しません。
-値は `pixel.json` やNPZで確認できます。例えば:
+Inspect a numeric pick value directly:
 
 ```python
 with np.load('debug-output/run-01/arrays.npz', allow_pickle=False) as a:
@@ -259,151 +263,202 @@ with np.load('debug-output/run-01/arrays.npz', allow_pickle=False) as a:
     print(a['pick_unknown_mask'][y, x])
 ```
 
-`pick.candidates` は順位付きリストで、各要素に `point_xy`, `area_px`,
-`current_depth_m`, `local_depth_m`, `reference_separation_m`, `local_separation_m`,
+`pick.candidates` records `point_xy`, `area_px`, `current_depth_m`,
+`local_depth_m`, `reference_separation_m`, `local_separation_m`,
 `local_support_fraction`, `clearance_px`, `region_clearance_px`,
-`nearest_supported_depth_m`, `id`, `rank`, `grasp_suitability` を記録します。
-`id` は候補成分IDで、rankや配列indexと一致するとは限りません。最良点は `pick.point_xy`。
+`nearest_supported_depth_m`, `id`, `rank` and `grasp_suitability`.
+IDs need not equal ranks or list indices; `pick.point_xy` is the best point.
 
-## 症状別の進め方
+## Troubleshooting
 
-| 症状 | 先に見るもの | 調整・判断 |
-| --- | --- | --- |
-| 影や照明変化がmaskに入る | dL/dC、color_only、depth前景、check結果 | 明度由来ならluma許容を上げる。全体offsetなら不変check領域で補正を検討。depth_requiredは薄い物体を失う代償がある。影と明度だけ違う物体は識別不能な場合がある |
-| 同色物体が欠ける | depth_difference、depth_valid、scale | 有効なdepth差がTを超えるか確認。ノイズ幅を確認してからTを下げる。両根拠で背景と同じなら閾値で解決できない |
-| 薄い物体が欠ける | 色score、min_object_area、fusion | unionと色許容を確認。面積除去されたなら対象に合わせて下げる。色だけの候補はuncertainであり、そのままpickへ渡すと除外される |
-| ノイズを摘み候補に拾う | 中心depthとlocal median、支持率、背景誤差 | local_depth_toleranceを小さく、支持率・窓・area/radiusを大きくする方向を1つずつ試す。広い一貫した誤差はこれでも通るため参照とセンサを確認 |
-| 境界や穴の近くを選ぶ | input clearanceとregion clearance、mask/ROI | boundary_guardとmin_region_radiusを上げる。余裕の大きい少し奥の点を許すならnearest_depth_bandを広げる。幅不足で候補が消える場合あり |
-| 候補なし／unknown | seg状態→成分→pick reasons→support/height→rejected_regions | 下記状態表で止まった段階を特定。支持がないのにelevationだけ下げても改善しない。傾斜・粗さ・欠損・窓幅を確認し、根拠なしにuncertainを無視しない |
-| 候補が多数に分かれる | supportedとunknownの穴、eligible_elevation、region面積 | noise/欠損で分裂していないか確認。小片だけならarea/radiusを上げる。支持許容を緩めると連結することもあるが、ノイズも通る。別物体はcontour_idで限定 |
-| 代表点が「一番浅い画素」と違う | local Z、nearest band、clearance | 単発最小値ではなく支持medianと余裕で選ぶため正常な場合あり。bandを小さくすると浅さ優先が強まるが、物理的成功率を意味しない |
-
-| 状態 | 次に確認すること |
+| Symptom | Inspect and adjust |
 | --- | --- |
-| seg `candidate` | maskとuncertainが目的に合うか。前景があっても確定物体とは限らない |
-| seg `unresolved` | evidenceで採用なし、抑制／保留候補あり。入力が背景と確定した意味ではない |
-| seg `no_change_candidate` | 入力の対応・同一参照汚染・閾値。物体不在の証明ではない |
-| seg `insufficient` / `empty_domain` | 有効maskとfusion policy／空work_roi |
-| pick `no_object` | 前段mask、observed、選択contour |
-| pick `unknown` | trustedな内部が残るか、欠損や局所不一致があるか。reasonsとunknown_maskを読む |
-| pick `no_candidate` | 評価できたが高さ・面積・幅を満たさなかった。rejected_regionsを読む |
-| pick `candidate` | 代表点の支持率・余裕・選択成分を確認。別領域にunknownが残ることもある |
+| Shadows/lighting enter the mask | Check dC/dL, color-only evidence and reference check. Increase luma tolerance for brightness changes; consider global compensation only with a valid check region. Depth-required loses thin targets |
+| Same-color target missing | Check units, pair validity and dZ. Lower T only after measuring noise. Identical background/target evidence cannot be separated by thresholds |
+| Thin target missing | Inspect color score, fusion and object-area filtering. Union can retain color-only candidates, but their uncertainty excludes them from trusted pick support |
+| Noise becomes a pick | Compare center and medians. Try tighter tolerance or greater support/window/area/radius one at a time. Coherent bias still passes; check the reference and sensor |
+| Points near holes/boundaries | Increase guard/radius; widen nearest-depth band to prefer more clearance. Candidates may disappear if too narrow |
+| No candidate or unknown | Follow segmentation, component, reasons, support/elevation and rejected regions. Lower elevation cannot fix absent support; inspect slope, missingness and window size |
+| Many small candidates | Inspect holes in support and elevation masks. Area/radius can reject fragments; looser support can connect them but also admit noise. Select the intended contour |
+| Point differs from nearest raw pixel | Expected when supported median Z and clearance beat an isolated minimum. A narrower depth band prioritizes proximity, not grasp success |
 
-## 色とdepthを照合するevidenceモード
+Segmenter `candidate` still permits uncertainty elsewhere; `unresolved` means no
+selection but suppressed/deferred candidates remain. `no_change_candidate` does
+not prove absence. For `insufficient` or `empty_domain`, inspect validity, policy
+and ROI. Pick `no_object` points upstream; `unknown` requires checking trusted
+interior, missingness and consistency; `no_candidate` means evaluated regions
+failed elevation/area/width. Even `candidate` leaves grasp suitability unverified.
 
-`RGBDBackgroundSegmenter(fusion_mode='evidence')` で有効化します。
-従来のunionはdepth候補を色の背景一致で抑制しません。evidenceはdepthの強度と
-近傍支持も見て、色による確認がない弱い／局所的に不整合なdepth候補を減らします。
-これは固定幅の輪郭侵食ではなく、単一ペアの根拠による選別です。真の物体が欠ける
-場合もあります。値は正答確率ではなく、時間的安定性も保証しません。
-[詳細な全ルールと理由コード](RGBD_BACKGROUND.md#evidence-fusion)も参照してください。
+## Evidence mode
 
-基本の分岐は次のとおりです。
+Use `fusion_mode='evidence'` to compare color confirmation, depth strength and
+local depth support. See [decision rules and codes](RGBD_BACKGROUND.md#evidence-fusion)
+for the authoritative branches. This is not fixed-width erosion, a probability,
+or a temporal-stability guarantee.
 
-- depth前景＋色の確認：採用。色がclipped・閾値margin内・無効・参照棄却なら確認に使いません。
-- 色の確認なし＋強いdepth＋局所支持：同色物体を含め採用しますがuncertainを付けます。
-- depth前景のみで、強度または局所支持が不足し、色は背景と一致：抑制して`suppressed_mask`へ。
-- depth前景なし＋十分なchroma差：薄物体候補としてuncertain付き採用。欠損policy・遠方vetoを適用。
-- それ以外の候補：`deferred_mask`へ保留。明るさ差だけの影／物体や弱depth＋不明な色など。
+1. Verify registration, units and reference, then set depth and color thresholds.
+2. Compare union and evidence on identical inputs; inspect `suppressed_mask`,
+   `deferred_mask` and decision reasons, including unresolved regions in a
+   result whose overall status is candidate.
+3. If shallow same-color targets disappear, consider a lower `strong_depth_ratio`
+   or union with explicit uncertainty. Color agreement does not prove background.
+4. If narrow same-color detail disappears, inspect support fractions before
+   lowering the fraction/radius. Defaults need 2 of 8 neighbors: rectangular
+   corners with 3 survive, but a one-pixel-line endpoint with 1 fails. Color-
+   confirmed features do not need this support branch.
+5. If inconsistent depth-only candidates remain, increase support or reduce
+   tolerance. Strong uniform reference bias still passes; acquire/check an
+   independent reference rather than assuming local agreement proves correctness.
 
-色の「背景一致」は物体不存在の証明ではありません。抑制／保留もuncertainに含めます。
-既定の局所支持は中心を除く3×3の8位置のうち2位置以上。位置ごとに、depth前景かつ
-中心とのdZ差が3 mm以下であることが必要です。欠損・背景・ROI外・画像外も分母に
-入り、支持には入りません。矩形角は3/8で残りますが、同色1画素線の端は1/8で落ちます。
-色で確認できる細い部分はこの局所支持条件を要求しません。
+Accepted depth-only and chroma-only regions remain uncertain and therefore do not
+provide trusted pick support. Do not clear uncertainty to force a pick. Luma-only
+thin targets may be deferred as indistinguishable from shadows; shadow plus depth
+bias can pass both modalities. Clipped/missing/rejected color cannot confirm or
+suppress depth. Color registration artifacts may remain chroma-only candidates.
 
-調整は以下の順で行います。
+Use `seg.outline_observed_mask` for outlines: observed minus suppressed/deferred,
+not minus all uncertainty. Unknown cuts can split contours. Legacy modes have no
+suppressed/deferred pixels, so this equals their observed mask.
 
-1. 単位・登録・空参照を確認し、既存のdepth閾値とchroma/luma許容値を決めます。
-   合わせ込みで画像ずれを隠さないでください。色参照checkの棄却時は色による抑制も停止します。
-2. 同じ入力でunionとevidenceを比較。まず`suppressed_mask`／`deferred_mask`と理由パネルを見ます。
-   全候補が消え、未解決画素が残ればfusion statusは`unresolved`です。`candidate`でも未解決領域は残り得ます。
-3. 同色物体が弱depthとして消えるなら`strong_depth_ratio`を下げるか、unionに戻して
-   不確かな形状として扱います。単に色一致を背景確定としないでください。
-4. 同色の細部が欠けるなら支持率配列を確認し、`depth_support_fraction`を下げる／
-   半径を小さくします。孤立点は正しい点かノイズかを判別できません。
-5. 不整合なdepthだけの候補が残るなら支持率を上げる／一致幅を下げる方向を試します。
-   強い一様な参照誤差はこれでも通ります。独立した撮り直し・参照確認が必要です。
-
-| 症状 | 確認と扱い |
-| --- | --- |
-| 色が背景一致で弱depth候補が消えた | 意図した抑制か真の浅い同色物体の損失かを実画像で確認。suppressedは背景確定ではない |
-| 強い同色形状は残るがpickがunknown | 採用depth-onlyはuncertainなのでpickのtrusted領域から除外される。uncertainを無条件に消して候補を強制しない |
-| 明度だけ違う薄物体が消える | 影と区別できずdeferredになる。必要ならunionで候補を残し、別の根拠で判定する |
-| 影＋弱depth誤差が通る | 両方で支持されると理由1になる。luma許容値・参照・登録を確認。単一ペアでは区別不能な反例がある |
-| 色ノイズや位置ずれの細い帯が残る | chroma-onlyもuncertain候補。背景checkや色許容を確認し、登録を修正。chromaを絶対視しない |
-| clipped色／欠損が多い | 確認・背景一致に使えずdeferredが増える。入力改善を優先。強い支持depthはuncertainのまま採用可能 |
-
-outlineには`seg.object_mask`と`seg.outline_observed_mask`を渡します。後者は
-`seg.observed_mask & ~seg.suppressed_mask & ~seg.deferred_mask`です。
-観測はあるが採否未解決の部分を、確定背景としてcorners/segmentsに使わないためです。
-未解決画素に隣接する切れ目は不確かと扱われ、成分が分かれる場合があります。
-**全uncertainを除いたり、object_maskを一律に侵食したりしません**。
-採用された色のみ／同色depthのみ形状はoutlineに残り、物理輪郭の保証はありません。
-従来モードでは新しい2マスクは全Falseなので、propertyは元のobserved_maskと同じです。
-
-pickへは従来どおり`segmentation_uncertain_mask=seg.uncertain_mask`を渡します。
-outlineの2D形状取得と、pickで信用して使える深度領域は分けて考えてください。
-
-debugは`diagnostics=True`と`seg.save_debug('fusion.png', color)`を使用します。
-新しい専用パネルは緑=両方、青=強い支持depthのみ、水色=chromaのみ、赤=抑制、
-紫=保留、橙=面積filterです。数値コードは`diagnostics['fusion_decision']`、
-凡例は`stages['fusion']['decision_reasons']`にあります。
-`depth_support_fraction`配列、`strong_depth_mask`、`locally_supported_depth_mask`、
-`reliable_color_foreground_mask`／`reliable_color_background_mask`で分岐の根拠を確認します。
-`accepted_both_mask`／`accepted_depth_only_mask`／`accepted_color_only_mask`は最終面積filter後の採用です。
-色のraw scoreが大きくても、clippedや参照棄却なら確認には使いません。
-
-次のexampleは11合成ケースで旧2方式と比較し、失敗例も出力します。
+With diagnostics, the fusion panel uses green for both modalities, blue for
+strong supported depth only, cyan for chroma only, red for suppression, purple
+for deferral and orange for area filtering. Inspect `fusion_decision` and
+`stages['fusion']['decision_reasons']`, plus `depth_support_fraction`,
+`strong_depth_mask`, `locally_supported_depth_mask` and reliable-color masks.
+Accepted masks reflect final area filtering.
 
 ```bash
 python examples/example_rgbd_fusion.py --output-dir debug-output/fusion-01
 ```
 
-実入力は既存tuning exampleのconfigに`{"segmenter":{"fusion_mode":"evidence"}}`を指定します。
-上記の新パラメータも同じJSONに追加できます。`pixel.json`と`arrays.npz`に理由・支持率が含まれ、
-`seg_outline_observed_mask`も保存されます。新モードの検証は合成の動作比較であり、
-独立した空背景実ペアの精度測定ではありません。
+For recorded input, use `{"segmenter":{"fusion_mode":"evidence"}}` in the
+existing tuning config. The example saves reason/support arrays and
+`seg_outline_observed_mask`. Generated examples demonstrate rules and failures,
+not real-pair precision/recall.
 
-## 確認されている範囲
+## Color-seeded mode
 
-合成反例と保存済み実配列で、欠損・成分限定・局所支持などの動作を確認しています。
-実配列に人工参照を付けた確認は本物の空背景ペアによる精度測定ではありません。
-真上で独立撮影した対応空背景ペアと、実把持成功の検証は未完了です。
-広く浮いた平面も候補となり、薄いしわ・急傾斜は支持や幅条件で除外され得ます。
-グリッパー形状・接触・物性を入力していないため、保証付きの摘み設定値はありません。
+Use `fusion_mode='color_seeded'` for strict chroma seeds with bounded weak-color
+edge growth. See [growth rules and diagnostics](RGBD_BACKGROUND.md#bounded-color-growth).
+Start with `color_growth_max_steps=0` to inspect seeds, then try 1–2 and compare
+`accepted_growth_mask` against the original image. Check registration, missing
+depth and dZ support before lowering `color_relaxation_ratio`.
 
+No seeds means no target, even with strong depth. Growth cannot jump gaps or
+reset its distance bound at new pixels. All additions remain uncertain; pass that
+uncertainty to pick. The three depth-support settings gate additions, not seeds;
+`strong_depth_ratio` is unused. A real hole with erroneous color and depth may
+still be filled within the bound. False seeds from colored shadows or registration
+are not removed by bounding growth. Detail/topology preservation is not guaranteed.
 
-## 色seedから境界だけを補うcolor_seededモード
+`growth_step` is -1 for unreached, 0 for seeds and 1..N for additions. Seed/step
+maps precede area filtering; accepted-growth masks follow it. Run
+`PYTHONPATH=src python examples/example_rgbd_seeded.py` for the minimal example,
+or select this mode in the NPZ example config.
 
-`fusion_mode='color_seeded'` は、影を避けた厳格な色抽出で輪郭が欠ける場合の
-別案です。既定のunionや既存evidenceの挙動は変えません。
+## Fixed settings across captures
 
-- `dC/Tc > 1 + background_score_margin` のchroma差がある画素をseedにします。
-  明るさだけの差はseedになりません。細線・小物体もこの条件を満たせば残します。
-- seedから8近傍で最大`color_growth_max_steps=2`画素まで、
-  寛容な色閾値と局所支持depthを両方満たす画素だけ追加します。
-  `color_relaxation_ratio=.5`は色楕円の半径倍率です。小さくするほど色差に寛容になります。
-  新しい画素から上限がリセットされることはありません。
-- 追加画素はすべてuncertainです。depth欠測は埋めず、遠方depth・ROI外・無効色は通りません。
-  深度が支持しない本物の穴を「囲まれているから」と埋めることもしません。
-- 同色物体などseedがない対象は消えます。大きな色欠損、離れた弱い端点も残ります。
-  隣接する影とdepth誤差が重なると上限内で誤追加し、本物の穴も両信号が誤れば埋まります。
-  色ずれ・有色の影が誤seedになれば、成長制限だけでは除けません。
+The segmenter and inward corner offsets do not estimate optimal settings per
+capture. Fixed settings require a defined operating range, aligned reference and
+consistent capture conditions. **Overlapping target and nuisance observations
+cannot be separated by threshold tuning.** The 5/80 mm depth band and two-pixel
+growth examples are not calibrated deployment recommendations.
 
-調整は最初に`color_growth_max_steps=0`でseedを確認し、1〜2へ増やして
-`accepted_growth_mask`と元画像を比較します。ratioを下げる前に、ずれ・depth欠測・
-深度差の支持を調べてください。全画像の平滑化や無条件の穴埋めより制限された処理ですが、
-細部を常に保つ保証はありません。独立した実画像の輪郭正解での精度は未検証です。
+### Depth-band separation
 
-`diagnostics['growth_step']`は-1が未到達、0がseed、1..Nが追加までの段数です。
-seed/stepは面積除去前、`accepted_growth_mask`は面積除去後の記録です。
-`seg.outline_observed_mask`で輪郭を抽出し、pickには`seg.uncertain_mask`を別に渡します。
-追加箇所のuncertainを消して把持候補を強制しないでください。
+For an upper camera-Z difference bound U, let `target_max` be the greatest true
+target difference over the operating range and `other_min` the smallest unwanted
+near-surface difference. With independent worst-case error bounds, separation
+requires:
 
-設定範囲: `color_relaxation_ratio`は有限数(0,1]、`color_growth_max_steps`はPython intの0..20。
-3つの`depth_support_*`は追加候補に適用し、seed自体は削りません。
-`strong_depth_ratio`はこのモードでは使いません。
-詳しい理由コードと診断契約は[API説明](RGBD_BACKGROUND.md#bounded-color-growth)を参照。
-最小例は`PYTHONPATH=src python examples/example_rgbd_seeded.py`です。
-既存NPZ入力例もconfigのsegmenterに同設定を指定できます。
+```text
+target_max + error_target <= U < other_min - error_other
+```
+
+This addresses only the upper bound; lower thresholds, missingness and color
+still matter. It is conservative if the extrema/errors cannot coincide. If
+observed target and nuisance ranges overlap, no shared upper bound exists. For
+example, target/occluder differences of 100/130 mm in one capture and 20/60 mm in
+another are individually separable but have no common upper limit. The 80 mm
+example loses the first target and admits the second occluder. Folds, lifting
+and sag affect target extent, not just material thickness.
+
+Camera-Z difference is not table-normal height. For parallel planes with normal
+`n` directed from camera toward table, table `n dot X=d`, raised surface
+`n dot X=d-h`, and ray `r=((u-cx)/fx,(v-cy)/fy,1)`, positive `n dot r` gives
+`dZ=h/(n dot r)`. At the center ray, 60 mm normal height becomes about 84.85 mm
+at 45 degrees. This derivation's normal is opposite the above-table-positive
+`TablePlane` convention. Real surfaces need not be planar. An equal Z translation
+of an ideal frontal current/reference pair cancels in the difference, so distance
+alone does not always require a new bound; pixel scale, sensor error, view and
+correspondence can nevertheless change.
+
+For pose-independent height, use calibrated intrinsics, a verified current table
+plane, `CameraIntrinsics.deproject` and `TablePlane.height`. This still cannot
+identify unwanted objects at the same height. Use independently justified ROIs,
+tracking, semantics or another view where needed; exclusion does not recover
+hidden target material. See the [depth-band workflow](RGBD_BACKGROUND.md#dark-shadows-and-much-nearer-objects).
+
+A lower bound L requires background errors <=L and desired observed target
+differences >L across captures. A 4 mm background error and 2 mm target cannot
+be separated this way. Local support can accept coherent bias: a uniform 7 mm
+reference error passes a 5 mm threshold. `background_check_mask` validates and
+compensates **color only**, not depth drift. `depth_margin_m` marks uncertainty;
+it is not hysteresis. Neither support nor `strong_depth_ratio` guarantees truth.
+Refresh references/calibration when camera or table geometry changes, measure
+repeated empty-depth errors, and monitor known unchanged regions in the
+application. The API does not validate temporal stability or depth reference drift.
+
+### Color seeds and projected scale
+
+Near the strict seed threshold, slight color variation can remove an entire
+unseeded object. For example, with background RGB (140,140,140) and default
+thresholds, a uniform target changing from (110,145,182) to (110,145,183) crosses
+approximately dC=23.19 to 24.08, across the strict `dC > 24` boundary in encoded
+8-bit Lab. This illustrates a threshold discontinuity, not a camera-specific
+failure frequency. More growth cannot recover zero seeds; lowering the relaxation
+ratio does not change seed eligibility. Growth limits constrain distance from
+seeds, not the number or area of false seeds elsewhere.
+
+Fix exposure, white balance, lighting, background and pose where possible; verify
+seed margins on independent captures. Global Lab compensation does not fix local
+shadows, clipping, motion or registration. Do not loosen reference-check bounds
+merely to accept incompatible captures.
+
+| Pixel setting | Effect of capture variation |
+| --- | --- |
+| `color_growth_max_steps` | A physically identical weak edge can project wider than the allowed growth distance |
+| `depth_support_radius_px` / fraction | Small projected shapes and missing samples reduce support; increasing radius is not monotonic |
+| `min_object_area` | Projected area changes approximately with the square of image scale |
+| `corner_window_px` / `clip_margin_px` | Direction support and distance from unobserved boundaries depend on projected shape and observation mask |
+| `corner_interior_points(offset_px)` | Exact pixel displacement or unavailable, not millimetres or a grasp clearance guarantee |
+
+For a frontal local plane, lateral displacement is approximately
+`offset_px * Z / fx`; twice the depth gives twice the physical displacement for
+the same pixel offset. Slopes/curves need a different conversion. Corner offsets
+are deterministic relative to the input contour; changing contours move them,
+and holes, narrow regions or unknown areas can make them unavailable. See the
+[offset contract](OUTLINE.md#separate-inward-offset-corner-positions).
+
+Units, color order, sentinels, validity and registration are acquisition facts,
+not tuning parameters. Fusion/missingness policies define what remains unknown;
+do not switch them per image merely to match a desired answer.
+
+### Validate one configuration
+
+1. Define distance/pose, target color/thickness/lifting, lighting and occluder
+   operating ranges. Acquire matching references/calibration for each geometry.
+2. Collect independent current/empty pairs and repeated empty scenes. Annotate
+   true contours separately from unknown regions and measure color/depth error.
+3. Separate tuning and held-out captures. Freeze settings and measure worst-case
+   target loss, shadow/occluder leakage, seed loss, corner variation and unknown
+   rates rather than retuning each image.
+4. If there is no separating margin across the range, improve acquisition or add
+   evidence before adding parameters. Insufficient real data is not validation.
+
+Synthetic tests establish API behavior, including counterexamples; they do not
+establish repeated real-capture stability or robot safety. Constructed references
+on recorded arrays likewise test input handling, not genuine empty/current
+accuracy. Independent registered real-pair accuracy and physical grasp success
+remain unvalidated. Broad elevated flat sheets can pass, while thin creases or
+steep slopes can fail support/width requirements.

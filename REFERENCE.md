@@ -83,12 +83,9 @@ Static checks do not prove alignment or detect every mismatch.
 
 Evaluate with independently annotated hand/object masks, separate from reference
 captures: hand recall, object false exclusion, object IoU, unknown fraction and
-per-side downstream outputs. A provisional controlled-workflow target is hand
-recall >= .98, object false exclusion <= .02 and object IoU >= .90 on **each**
-confirmed aligned scene, with pose/lighting/occlusion negatives explicitly
-reported. These are acceptance targets, not achieved real-world accuracy.
-Current real examples lack independent empty/gripper reference pairs and human
-segmentation/physical-grasp truth; practical readiness is **not established**.
+per-side downstream outputs. Set task-specific acceptance thresholds and include
+pose, lighting and occlusion negatives. Synthetic examples do not establish
+real-world segmentation accuracy or physical-grasp truth.
 Never transfer a start-image mask merely because camera pose is unchanged.
 
 Run `python examples/example_reference_grasp.py`. It uses independent synthetic

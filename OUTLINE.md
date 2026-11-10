@@ -43,7 +43,7 @@ regions produce explicit empty/insufficient results, not invented large contours
    Raw pixel-center points are canonicalized clockwise in image coordinates, starting
    at the topmost, then leftmost point. Holes use the same canonical convention but
    have an explicit hole role. Zero-area chains are labeled degenerate.
-2. The closed contour is uniformly sampled at approximately1px arclength. Periodic
+2. The closed contour is uniformly sampled at approximately 1 px arclength. Periodic
    Gaussian coordinate smoothing is used **only** for tangent/turn measurements.
    Chords on each side of a point measure signed turn at the selected support scale.
    Thresholded turns undergo cyclic distance suppression; the array seam is not an
@@ -67,11 +67,11 @@ from point i to `(i+1) % edge_count`. A segment owns `edge_count` edges starting
 `start_index`; `end_index` is the final endpoint modulo contour size. Its points
 include both endpoints; adjacent sections share an endpoint but **never an edge**.
 Summed section arc lengths equal the closed raw perimeter. `sequence_start_index`
-may differ from raw point0 because a section can cross the canonical seam. Follow
+may differ from raw point 0 because a section can cross the canonical seam. Follow
 `sequence`, not a length-sorted list, to traverse one complete cycle.
 
 Pixel-center coordinates differ from outer cell-edge dimensions (a mask spanning
-x=40..180 has a140px center-to-center side). Raster diagonal staircases inflate
+x=40..180 has a 140 px center-to-center side). Raster diagonal staircases inflate
 raw arc length compared with Euclidean physical edges. Resizing changes these errors.
 Official contour/shape APIs: https://docs.opencv.org/4.x/d3/dc0/group__imgproc__shape.html .
 This implementation uses those APIs and independent NumPy geometry, not copied code.
@@ -85,14 +85,14 @@ available in `model.parameters`; JSON round-trip with `OuterContourDetector(**co
 |---|---|---|
 | `smoothing_px` | `1.0` | Gaussian sigma, px, 0..20. More smooths turn noise but can suppress real sharp/small corners. Raw contour/fit lengths stay unchanged. |
 | `corner_window_px` | `8.0` | Chord support arclength on either side, px, 1..100. Larger measures broader bends and needs more perimeter. |
-| `corner_turn_deg` | `45.0` | Absolute turn threshold, degrees (0,180]. Larger reports fewer angle events. Zero is straight;90 is a right-angle turn. |
+| `corner_turn_deg` | `45.0` | Absolute turn threshold, degrees (0,180]. Larger reports fewer angle events. Zero is straight; 90 is a right-angle turn. |
 | `min_corner_spacing_px` | `8.0` | Cyclic arclength suppression distance, px, 1..200. Larger removes nearby events, possibly true neighboring corners. |
 | `straight_turn_deg` | `5.0` | Local absolute-turn limit for straight-section proposals, degrees 0..180. Larger admits more curved proposals; whole-interval fit guards still apply. |
 | `line_error_px` | `1.5` | Maximum raw-point perpendicular TLS line error, px, nonnegative. Larger accepts noisier/curvier lines. This is max error, not RMS. |
 | `max_arc_chord_ratio` | `1.15` | Maximum raw arclength/chord ratio for a straight interval, >=1. Larger tolerates more staircase/roughness/backtracking. |
 | `min_section_length_px` | `8.0` | Shorter final sections are retained as unknown, nonnegative px. Larger withholds short classifications, not coverage. |
 | `min_straight_length_px` | `20.0` | Minimum supported straight interval, nonnegative px. Larger rejects short locally flat patches on curves; small whole straight intervals become unknown. |
-| `clip_margin_px` | `1` | Integer0..10, extra inward margin near frame/unobserved domain. Larger marks more boundary evidence uncertain; even0 detects direct artificial edges. |
+| `clip_margin_px` | `1` | Integer 0..10, extra inward margin near frame/unobserved domain. Larger marks more boundary evidence uncertain; even 0 detects direct artificial edges. |
 | `max_depth_jump_m` | `0.02` | Maximum adjacent camera-Z jump for optional complete 3D length. Larger risks joining different surfaces. Not a pixel threshold. |
 
 First verify the mask and observation domain. Set support/smoothing lengths for
@@ -270,7 +270,7 @@ query_m = result.query_edge_length(.20, unit='m', tolerance=.01)
 ```
 
 Depth is optical-axis Z, not radial range. Scale is explicit for every numeric dtype:
-.001m/count for millimetres,1 for metres. Intrinsics must match this rectified/cropped
+.001m/count for millimetres, 1 for metres. Intrinsics must match this rectified/cropped
 pixel grid; no world/robot calibration or table plane is needed for 3D point distances.
 `registered_to_mask=True` is a caller declaration, not automatic verification.
 Finite positive depth and optional bool `depth_valid_mask` gate samples. Mixed-depth
@@ -299,7 +299,7 @@ Each contour includes `id`, `status`, `points_xy`, `closed`, `orientation`, `are
 insufficient_support, ambiguous_self_touch or insufficient_computation_budget.
 `area_px` is polygon area of the outer contour, before subtracting holes; it is
 not the count of object-mask pixels. A contour needs >=8 raw samples and perimeter >=4 corner windows for supported
-classification. Over20,000 raw samples skips turn processing and returns unknown
+classification. Over 20,000 raw samples skips turn processing and returns unknown
 classification with raw coverage; reduce image resolution for practical use.
 
 Segments include kind straight/curve/unknown, raw-edge index interval, raw XY points,
@@ -315,7 +315,7 @@ corner endpoint IDs (null for ordinary joins), visibility observed/uncertain and
   from raster zigzags; it is a noise measurement, not physical integrated curvature.
 - `metric`: status/reason, sample/pair validity, valid_fraction, observed adjacent sum,
   full `arc_length_m`, `chord_length_m`, `fit_length_m`, `line_rms_m`,
-  `line_max_error_m` and fitted3D endpoints when usable.
+  `line_max_error_m` and fitted 3D endpoints when usable.
 
 Corners are point events with ID, raw point index/XY, signed turn, convex/concave kind,
 and visibility. No extra length is allocated to a corner. `sequence` interleaves
@@ -325,14 +325,14 @@ corner events and segment IDs; smooth section joins have no invented corner.
 min_support_px=20., max_line_error_px=None, max_metric_line_error_m=.005,
 require_corner_endpoints=False)` uses
 **fit length** of straight intervals. Pixel/m tolerance must be supplied in the same
-unit as the target. None uses5px or0.005m according to unit; these defaults are
+unit as the target. None uses 5 px or 0.005 m according to unit; these defaults are
 provisional, so choose a site-specific tolerance. Match tests abs(length-target)<=tolerance. At_least tests
-length+tolerance>=target. Comparisons allow floating roundoff of8 machine epsilons
+length+tolerance>=target. Comparisons allow floating roundoff of 8 machine epsilons
 times max(1, length, target, tolerance); this is not a sensor-error allowance.
 The returned `length_kind` is explicitly `tls_projected_span`. The query error limit defaults to detector line_error_px;
 raising it cannot restore intervals already classified curve/unknown. Metric queries
-add `max_metric_line_error_m=.005` (metres): image-straight intervals can curve in3D.
-Above this perpendicular3D line error, the metric query remains unknown while pixel
+add `max_metric_line_error_m=.005` (metres): image-straight intervals can curve in 3D.
+Above this perpendicular 3D line error, the metric query remains unknown while pixel
 queries and all length measurements remain available. Larger values loosen this
 query-only guard; they do not change contour decomposition. Optional
 corner-endpoint requirement excludes tangent or artificial section joins.
@@ -357,15 +357,13 @@ uint8 HxWx3; absent color uses depth percentile display or mask shading. Green i
 straight, blue curve, gray short/holes, magenta observation uncertainty, orange
 corners (magenta when uncertain). With IDs enabled, corner labels include signed
 turn degrees and a white ring marks the cyclic sequence start. Disable IDs for dense shapes. Raw points and fitted spans remain in JSON.
-DiagnosticsFalse still renders all known intervals. Saving explicitly returns a
+`diagnostics=False` still renders all known intervals. Saving explicitly returns a
 Path, writes PNG only, requires an existing non-symlink parent and refuses overwrite
 unless requested. Detection never writes. Source/result arrays are not mutated.
 
 Run `python examples/example_outline.py --output NEW_IMAGE.png`. The example builds
-a synthetic mask and queries a known pixel-center side. Dataset-specific replay,
-parameter comparison and Japanese human instructions live outside Git; existing
-real masks have no verified straight/curve/physical-length labels. They support
-operational sensitivity and visual checks, not a real accuracy claim.
+a synthetic mask and queries a known pixel-center side. Synthetic controls do not
+establish real-world straight/curve classification or physical-length accuracy.
 
 ## Exact visible component mask
 
@@ -377,3 +375,42 @@ invalid explicit IDs or malformed seed coordinates raise `ValueError`. Recompute
 the outline after changing its input mask. See [overhead pick candidates](PICK_CANDIDATES.md)
 for a depth-supported interior-region use case. The previous example helper
 `contour_component_mask(result, contour_id)` delegates to this installed method.
+
+## Select an interior point in one column
+
+Run `python examples/example_vertical_interior.py --x 16` from the repository
+root. This NumPy example selects `[16, 16]` in the inclusive run `[12, 21]`, with
+vertical clearance `4` pixels. It uses only the selected column, not 2D distance
+or horizontal clearance. Add `--from-boundary-result` to demonstrate a
+`BoundaryResult.object_mask`, or `--largest-contour` to restrict to the largest
+visible connected component (these flags require optional OpenCV).
+
+```python
+from examples.example_vertical_interior import (
+    select_vertical_interior, contour_component_mask,
+)
+
+selection = select_vertical_interior(boundary_result.object_mask, x=16)
+# Or restrict an OuterContourResult to one component before selecting:
+component = contour_component_mask(outline_result)  # Largest polygon area.
+# component = contour_component_mask(outline_result, contour_id=chosen_id)
+selection = select_vertical_interior(component, x=16)
+if selection is not None:
+    x, y = selection["point_xy"]
+    print(selection["run_y_inclusive"], selection["vertical_clearance_px"])
+```
+
+The column-selection helper lives in the example, not the installed package.
+`contour_component_mask` delegates to the installed `component_mask` method
+[described above](#exact-visible-component-mask), preserving holes and visible
+component identity. Touching objects in one component remain inseparable.
+
+Each contiguous True run in the column is considered separately. Choose the
+longest run, then the topmost for equal lengths, and the upper middle pixel for
+even lengths. `vertical_clearance_px = min(y - start, end - y)` measures distance
+between foreground pixel centers: endpoints and singletons have clearance zero.
+It is **not** distance to the first background pixel or a subpixel material edge.
+All-False columns return `None`; invalid mask type/shape or x raises `ValueError`.
+Top/bottom image contact sets `truncated=True`; reported clearance then describes
+only visible support, not a known physical edge. Artificial internal ROI cuts
+need caller interpretation; side-edge proximity never affects this calculation.

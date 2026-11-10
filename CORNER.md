@@ -17,8 +17,7 @@ python examples/example_corner.py
 python -m unittest tests.test_corner -v
 ```
 
-No model, training or network access is used at detection time. The development
-environment already had OpenCV 4.6.0; no dependency download was needed for this pass.
+No model, training or network access is used at detection time.
 OpenCV >=4.5.5 uses Apache-2.0; NumPy retains BSD-3-Clause. Neither is vendored.
 Original implementation code remains MIT. See [OpenCV licensing](https://opencv.org/license/).
 
@@ -93,8 +92,8 @@ Outside depth statistics exclude all components. Connectivity is a mask property
 not semantic identity: touching components cannot be separated by this rule.
 
 A perfectly aligned hidden layer can produce exactly the same RGB/depth inputs
-as one layer. Four such corners pass every stage in the regression set. Neither
-height, local planarity nor this detector can resolve that counterexample.
+as one layer. Neither height, local planarity nor this detector can resolve
+that counterexample.
 Registration errors may yield suspected internal steps or unknown boundaries;
 some offsets remain undetected. Local checks do not inspect the entire object.
 
@@ -138,8 +137,7 @@ Original code independently uses standard operations described by the official
 and [shape API](https://docs.opencv.org/4.13.0/d3/dc0/group__imgproc__shape.html).
 No external detector implementation, data or learned weights are bundled.
 Synthetic regressions check contracts, not field accuracy. Real-image performance,
-registration error and overlap labeling are not established by this API. Detailed
-comparisons and research records are maintained outside the repository.
+registration error and overlap labeling are not established by this API.
 
 ## Bounded adaptive support (opt-in)
 
@@ -194,27 +192,10 @@ are outside this proposal mechanism. Upstream masks can themselves miss or alter
 real boundaries. End-to-end segmentation and physical grasp accuracy are not
 established by this mode. The independent grasp feature is unchanged.
 
-For local evaluation, define any exterior-eligible label subset by distance to
-the original supplied external contour, independently of predictions and epsilon.
-Keep all-label scores and eligibility-tolerance sensitivity alongside subset
-scores; do not use a fitted polygon to decide which labels count. Keep related
-lighting/background views in the same scene group. Evaluation tools, source data
-and before/after galleries belong outside this repository.
-
 OpenCV documents epsilon as the maximum permitted curve-approximation distance:
 [structural analysis / approxPolyDP](https://docs.opencv.org/4.x/d3/dc0/group__imgproc__shape.html).
 The bounded multiscale union and quality ordering here are independent engineering
 choices, not an OpenCV semantic corner classifier or a learned model.
-
-The optional policy is a recall/false-candidate tradeoff, not a new accuracy
-claim. A small fixed development comparison found more accepted exterior
-candidates but lower RGB-only precision; a rounded synthetic silhouette also
-produced a false RGB-only corner that local refinement rejected. Keep the
-single-scale default for compatibility. Inspect refined/depth evidence before
-using multiscale candidates. Near-complete coverage by raw vertices does not
-imply accepted-corner recall: angle, local support and depth checks can reject
-those same vertices. No labels are used by the detector.
-
 
 ## Explicit recommended starting preset
 
@@ -249,10 +230,8 @@ not an empirically optimal preset or a real-robot validation result.
 Diagnostic mode still requires supported, nondegenerate long and short line
 fits. It keeps local convexity, fitted angle, line residual, intersection shift,
 fit-to-polygon displacement, visibility and depth checks. Missing short-window
-support does not become an accepted single-window fallback. Minimum support now
-controls both fit eligibility and bounded adaptive-window selection. Earlier
-external support-threshold experiments which left adaptation fixed at four points
-are not exact performance measurements of a different `min_fit_support` here.
+support does not become an accepted single-window fallback. Minimum support
+controls both fit eligibility and bounded adaptive-window selection.
 
 `summary["tuning"]` records resolved parameters. Each candidate records
 `stage_results`: polygon checks, local support counts and independently computable
@@ -269,9 +248,8 @@ A failed diagnostic angle check adds
 `warnings=["angle_stability_exceeds_diagnostic_threshold"]` even when another
 check rejects the candidate. Aggregate `reasons` retain their existing semantics;
 use independent check records for overlapping causes. An anomaly-free independent
-depth probe now correctly reports `candidate_quality="accepted"`; older versions
-reported `unknown` due to its initialization. This corrects diagnostic output,
-not the legacy candidate acceptance path.
+depth probe reports `candidate_quality="accepted"`; this is separate from
+the candidate acceptance path.
 
 Suggested adjustment order:
 
@@ -292,7 +270,7 @@ Suggested adjustment order:
    reasons on real robot data. Unmatched detections are not automatically false
    physical corners. Do not choose a preset just because it returns fewer unknowns.
 
-## Thresholds, measurements and possible future ranking
+## Measurement scope
 
 The current measurements are 2D right-angle proximity, line-fit support and
 residuals, local depth consistency, and image-space area/support. Specifically,
@@ -312,16 +290,6 @@ uses lexicographic mask-geometry ordering; final merging prefers accepted status
 then lower line residual and coordinates. This is deterministic deduplication,
 not a confidence model.
 
-A future optional ranking could order candidates that have already met the
-required validity/quality conditions, using angle error, supported local area
-and consistency. Invalid input, degenerate fits or critical depth constraints
-should not be compensated by a high angle score. Missing features should remain
-explicitly unavailable; they should not silently become zero errors or be
-renormalized into apparent certainty. Weights, normalization, required features
-and missing-data behavior need a separate design and real-data validation.
-This change exposes tuning and diagnostic evidence only; no new weighted
-classifier is implemented, and no grasp/overlap correctness is guaranteed.
-
 ## Render and save debug images
 
 Rendering is part of the public `CornerResult` API. It does not rerun detection,
@@ -336,10 +304,11 @@ image = result.render_debug(color, color_order="RGB", max_labels=12)
 result.save_debug("corner-debug.png", color, color_order="RGB")
 ```
 
-`render_debug(color, *, color_order, mask_alpha=.2, show_contours=True,
-max_labels=12, panel=True)` returns the **same RGB/BGR order explicitly supplied**.
-Color must be uint8 HxWx3 matching `result.object_mask` and the original crop/pixel
-frame. No resizing or registration is inferred. The source occupies the top-left
+`render_debug(color=None, *, color_order="RGB", depth=None, depth_scale_m=.001,
+mask_alpha=.2, show_contours=True, max_labels=12, panel=True)` returns the **same RGB/BGR order explicitly supplied**.
+When supplied, color must be uint8 HxWx3 matching `result.object_mask` and the
+original crop/pixel frame. Without color, supply depth and its explicit scale;
+the renderer uses percentile intensity, not metric height. No resizing or registration is inferred. The source occupies the top-left
 of the canvas with unchanged pixel coordinates. `panel=False` returns source-sized
 pixels and omits the legend/details/warning text; `max_labels=0` suppresses IDs and
 candidate detail rows while retaining all in-frame candidate markers. The maximum
@@ -356,7 +325,8 @@ small contours, pre-proposal vertices or deduplicated candidates absent from the
 result. Empty candidates do not prove absence of physical corners. Off-image or
 unavailable positions are reported but not drawn as invented in-frame points.
 
-`save_debug(path, color, *, color_order, overwrite=False, **render_options)` saves
+`save_debug(path, color=None, *, color_order="RGB", overwrite=False,
+depth=None, depth_scale_m=.001, **render_options)` saves
 lossless PNG and returns its `Path`. Only `.png` is supported. The parent directory
 must already exist and must not itself be a symlink; use a trusted output directory.
 Existing files or symlinks raise `FileExistsError` by default. `overwrite=True`
@@ -367,7 +337,7 @@ never write files. The PNG encoder handles RGB/BGR correctly; callers using
 
 Run `python examples/example_corner_debug.py` for memory-only rendering, or
 `python examples/example_corner_debug.py --output corner-debug.png` to explicitly
-save. Detailed evaluation galleries remain external to the public repository.
+save.
 
 ### Optional mask calculation
 

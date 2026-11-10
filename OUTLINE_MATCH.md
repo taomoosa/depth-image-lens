@@ -60,7 +60,7 @@ Run `PYTHONPATH=src python examples/example_outline_match_sources.py` to execute
 `--output-dir /existing/parent/new-folder` for a JSON report and numbered PNGs.
 The example refuses an existing output directory. The source contains a separate
 commented block for each class, including actual detector/segmenter calls; no
-result objects are fabricated. The matching library itself is unchanged.
+result objects are fabricated.
 
 Use these output fields with the example's `match_mask(...)` helper, which calls
 `OuterContourDetector.detect(...)` followed by `match_partial(...)`:
@@ -225,13 +225,6 @@ compare `simplify_px=0` for diagnosis, while keeping raster staircase sensitivit
 in mind. Neither a denser search nor more permissive thresholds restores curves
 already removed from a corner-only target.
 
-Synthetic regression cases include a curved shirt side from the same mask:
-five corner chords failed with score 1.065, while the corresponding dense arc
-passed with 0.038. Another case formerly changed from rigid score 0.977 (`matched`)
-to 1.060 (`not_matched`) when sleeve rotation was enabled. Preserving the rigid
-search fixes that regression. These are controlled examples, not measured
-real-shirt accuracy or a diagnosis of an unseen user image.
-
 Global Hu-moment comparison does not provide an ordered open-to-subarc alignment
 ([OpenCV shape API](https://docs.opencv.org/4.0.1/d3/dc0/group__imgproc__shape.html)).
 Shape contexts with flexible correspondence/deformation are a useful broader
@@ -350,6 +343,5 @@ angles on raster masks, folds and unrelated silhouettes, high-frequency contour
 disturbance, small coordinate noise, short missing edges, independent observed
 arcs, frame/domain clipping, ambiguity between objects, hole exclusion, invalid
 inputs, deterministic results and strict JSON. The synthetic controls do not
-establish real-shirt classification accuracy. Existing real masks can exercise
-integration and self-retrieval, but no verified good/bad partial-shirt matching
-labels or independent target/current pairs were available for this task.
+establish real-shirt classification accuracy; deployment requires independent,
+labeled target/current pairs.

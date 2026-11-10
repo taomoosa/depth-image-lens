@@ -48,7 +48,7 @@ separate foreground island inside another component's hole therefore retains its
 own exterior. No global filling merges identities. With include_holes=True, use the
 original per-component mask. The distance transform is explicitly zero-padded;
 image edges never accidentally have infinite distance. An axis-aligned boundary
-object pixel is normally distance1px, not0: this is **not** exact distance to contour
+object pixel is normally distance 1 px, not 0: this is **not** exact distance to contour
 pixel centers or a subpixel physical silhouette. `near_px=0` therefore normally has
 no near object pixels. Comparisons promote stored distances to float64 so the
 caller threshold is not rounded to float32. The OpenCV distance transform and
@@ -139,5 +139,5 @@ and returns a Path. No files are written during detection/filtering/rendering.
 Run `python examples/example_boundary_proximity.py --output NEW_IMAGE.png`.
 Adjust `--near-px`, `--reject-fraction`, `--include-holes` and use a new output path.
 The example constructs analytic color bands, runs the actual detector, then filters
-its graph. Evaluation fixtures and real-data comparisons remain outside Git; no
-real physical boundary accuracy is established by this proximity heuristic.
+its graph. This proximity heuristic does not establish physical boundary accuracy;
+see [validation limits](BOUNDARY.md#method-scope).

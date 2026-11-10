@@ -152,8 +152,6 @@ selected fit's reference mask:
 python examples/example_edge_bulge.py --output-dir /tmp/edge-bulge-demo
 ```
 
-The destination must not exist. Current checks use synthetic geometry and
-counterexamples, including missing data, crop, holes, disconnected components,
-spikes, slopes and broad-reference failure cases. A monitor photograph cannot
-validate depth accuracy or a threshold; quantitative current depth, its scale,
-mask and sensor validity are needed for scene-specific evaluation.
+The destination must not exist. Synthetic examples do not validate camera-specific
+depth accuracy or thresholds. Scene-specific evaluation requires current depth,
+its scale, the object mask and sensor validity, not a photograph of a depth display.

@@ -150,12 +150,6 @@ shape, and budget exhaustion. Add `--output-dir /existing/parent/new-folder`
 for JSON and diagnostic PNGs. These are synthetic controls and timing samples,
 not real-image noise/fold accuracy.
 
-Skipping is not sufficient when the edge itself still fails: a low-resolution
-raster version of the small-bend fixture scored 1.082 after its extra corner was
-skipped and remained `not_matched`; at twice the raster resolution it scored
-0.984 and passed. Keep the edge diagnostics when tuning, rather than assuming
-every skipped corner is harmless or increasing its allowance indefinitely.
-
 ## Transform meaning and sleeve configuration
 
 The transform has no shear or reflection. For column coordinates:
@@ -193,8 +187,7 @@ is in that target's coordinate frame. One region rotates before axial scaling;
 adjacent fixed vertices reconnect by straight segments. No local length-stretch
 parameter exists. Angles are enumerated, including zero, within the declared
 range (maximum configurable range ±45 degrees). Every surviving angle's corner
-correspondences are evaluated; no coarse spatial seed can displace the rigid
-angle as in the legacy search regression. No corner indices are re-detected on
+correspondences are evaluated. No corner indices are re-detected on
 each rotated target hypothesis. Strong distortion can thus invalidate a
 correspondence instead of being absorbed as a different corner topology.
 
@@ -261,14 +254,6 @@ example compares both matchers on the same synthetic continuous polygons and
 reports separate runtimes and outputs. A shear example passes the legacy shape
 tolerances but fails the new per-edge checks. This demonstrates a differing
 constraint, not overall superiority or measured real-shirt accuracy.
-
-A separate smoke check used four existing provisional real-image masks, each
-with its own fixed 10%-start, 35%-vertex-count target window. This matcher returned
-one `matched`, one `unknown` for nearly collinear internal corners and two
-`unknown` for only two internal corners; the legacy matcher matched all four.
-This is same-contour retrieval, not an independently labeled good/folded test.
-It reinforces that some useful real outlines cannot identify two axial scales
-from their corners. No mask/RGB data is bundled with these synthetic examples.
 
 Use the legacy matcher for shapes with too few stable corners or when approximate
 arclength matching is preferred. Use this matcher when the internal bends are

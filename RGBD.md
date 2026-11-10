@@ -7,19 +7,6 @@ skin color. Foreground and unit conventions are unchanged. The feature-wise beha
 applies to depth geometry as well as RGB-D. No pretrained
 model, network service, training or additional runtime dependency is used.
 
-## Method choice
-
-| Approach | Benefit | Limitation and decision |
-|---|---|---|
-| Foreground-constrained seeded RGB distance | Small, inspectable; works with arbitrary hand colors and several seeded object colors | No spatial/material semantics; selected baseline with explicit unknown pixels |
-| Seeded region growth using depth and color | Can limit disconnected color matches | Can leak through similar touching surfaces and split folds; not added in this pass |
-| GrabCut / color mixture plus graph cut | Combines color distributions and boundaries, supports user strokes | Iterative and may require corrections; extra OpenCV dependency and hard assignments do not establish contact; researched, not implemented here |
-
-The [original GrabCut work](https://www.microsoft.com/en-us/research/publication/grabcut-interactive-foreground-extraction-using-iterated-graph-cuts/)
-and [OpenCV tutorial](https://docs.opencv.org/4.13.0/dd/dfc/tutorial_js_grabcut.html)
-explain the graph-cut alternative. This implementation is our own simple color
-baseline, not a reproduction of that algorithm or its published accuracy.
-
 ## Inputs and outputs
 
 ```python
@@ -149,9 +136,6 @@ Unverified zero pixels in the search region withhold bridge `no` and drape
 is recovered, and incorrect caller attestations cannot be discovered from the
 masked input. Default zero-difference validity remains unchanged.
 
-Detailed benchmarks, dataset eligibility checks and review galleries are local
-external records. This package does not depend on evaluation scripts or datasets.
-
 ## Supplied object masks without a measured background
 
 `BridgeDrapeDetector.detect_mask` accepts an explicitly supplied boolean object
@@ -185,13 +169,9 @@ spanning mask still do not verify contact. Pre-guard geometry is recorded in
 `features.supplied_mask_geometry_before_guard` for debugging, not as the final
 prediction. Raw depth zero remains invalid; difference zero remains excluded.
 
-Keep real-data masks, images, license evidence, and review galleries outside this
-MIT repository. Preserve annotation provenance, distinguish provisional masks from
-independent ground truth, and report unscored predictions as such. A confidence
-filter comparison is a separate condition, not proof that its positive outputs
-are correct. Existing small real batches may be insufficient for an accuracy or
-false-bridge estimate even if a geometry candidate is found.
-
+Supplied masks are not independent ground truth. Geometry candidates and
+confidence filters do not establish accuracy or a false-bridge rate; independent
+real-data validation is required.
 
 ## Independent features and evidence quality
 
@@ -242,12 +222,5 @@ That mask does not establish object/hand identity. Similar colors remain
 ambiguous. The example keeps color-candidate and depth-candidate stages separately
 from its conservative semantic classification.
 
-Related dependency audit: Lift now computes finite height samples below its
-coverage threshold while its lift decision remains unknown; height failure does
-not erase other finite samples. Corner keeps polygon acceptance separate from
-local line and depth-patch measurements. Low depth coverage can retain a plane
-residual but cannot pass the existing candidate-quality checks. Shapes with no
-polygon candidate, non-deprojectable height samples, or fewer than three
-nondegenerate plane points remain unprocessable for those specific features.
-These additions do not validate grasp, contact, single layers, or whole-object
-visibility. Real-data evaluation remains external to this repository.
+These features do not validate grasp, contact, single layers, or whole-object
+visibility. Independent real-data validation is required.

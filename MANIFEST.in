@@ -1,7 +1,33 @@
-include LICENSE README.md API.md AUTO.md DIAGNOSTICS.md RGBD.md GRASP.md OBJECT_GRASP.md CORNER.md REFERENCE.md SURFACE.md DEBUGGING.md BOUNDARY.md BOUNDARY_TOPOLOGY.md BOUNDARY_SHADOW.md BACKGROUND_TOLERANCES.md TUNING.md OUTLINE.md BOUNDARY_PROXIMITY.md RGBD_BACKGROUND.md PICK_CANDIDATES.md RGBD_PICK_TUNING.md requirements.txt
+# Public documentation is explicit; private notes must not enter distributions.
+include LICENSE
+include MASK_CLEANUP.md
+include API.md
+include AUTO.md
+include BACKGROUND_TOLERANCES.md
+include BOUNDARY.md
+include BOUNDARY_PROXIMITY.md
+include BOUNDARY_SHADOW.md
+include BOUNDARY_TOPOLOGY.md
+include CORNER.md
+include CORNER_OUTLINE_MATCH.md
+include DEBUGGING.md
+include EDGE_BULGE.md
+include GRASP.md
+include OBJECT_GRASP.md
+include OUTLINE.md
+include OUTLINE_MATCH.md
+include PICK_CANDIDATES.md
+include README.md
+include REFERENCE.md
+include RGBD.md
+include RGBD_BACKGROUND.md
+include RGBD_PICK_TUNING.md
+include SURFACE.md
+include TUNING.md
+include requirements.txt
 recursive-include examples *.py *.json
 recursive-include tests *.py
-include OUTLINE_MATCH.md
-include CORNER_OUTLINE_MATCH.md
-include RGBD_SHADOW_OCCLUDERS.md
-include RGBD_CAPTURE_STABILITY.md
+
+# Evaluation runners are local tooling, not public API examples.
+exclude examples/benchmark_*.py examples/compare_*.py examples/evaluate_*.py examples/gallery_*.py
+exclude tests/compare_*.py

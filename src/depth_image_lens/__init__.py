@@ -69,3 +69,7 @@ __all__ += ["PartialOutlineMatcher", "PartialOutlineMatchResult", "OutlineArticu
 from .corner_outline_match import CornerOutlineMatcher
 
 __all__ += ["CornerOutlineMatcher"]
+
+from .mask_cleanup import cleanup_mask, MaskCleanupResult
+
+__all__ += ["cleanup_mask", "MaskCleanupResult"]

@@ -80,7 +80,7 @@ Connectivity is eight-neighbour. Visible paths around small holes can support a 
 
 Record one fixed-camera empty background and static states showing a horizontal bridge, deep U, left-only drape, right-only drape, separate drapes and arms alone. Independently check masks, anchor candidates and actual contacts. There are currently no matched real background pairs in this project's tests, and no synthetic background is reported as a real evaluation.
 
-Optional `diagnostics=True` on either method records the regions and envelope samples used. It does not change decisions. See [DIAGNOSTICS.md](DIAGNOSTICS.md) for array/JSON contracts and the dependency-free SVG example.
+Optional `diagnostics=True` on either method records the regions and envelope samples used. It does not change decisions. See [debugging and diagnostics](DEBUGGING.md#bridge-drape-diagnostics) for array/JSON contracts and the dependency-free SVG example.
 
 ## Optional background subtraction
 
@@ -162,7 +162,7 @@ The visible state is lifted when a four-connected elevated component and elevate
 
 Tune `lift_height_m` and `near_table_m` for the task, then `height_error_m` for combined depth/plane uncertainty, and pixel area/coverage thresholds for resolution and visibility. `height_error_m` is a caller-supplied assumption, not an estimated or guaranteed error bound. Uncertainty crossing the height threshold is retained. The default numeric thresholds are examples, not validated real-camera values. A wrong mask/plane can still produce a confident wrong result; no mask, plane, camera-motion or gravity validation is automatic.
 
-This small implementation reuses the project's earlier independent LiftDetector and camera-frame geometry. The caller supplies a plane directly or uses the small SVD helper below; the earlier RANSAC framework and research data are not included. Synthetic regressions cover oblique height, table thickness, partial visibility/contact, missing depth, isolated pixels, count-scale equivalence and invalid geometry. They establish behavior only, not real-scene accuracy.
+Supply a plane directly or use the SVD helper below. Synthetic regressions cover oblique height, table thickness, partial visibility/contact, missing depth, isolated pixels, count-scale equivalence and invalid geometry. They establish behavior only, not real-scene accuracy.
 
 ## Empty-table plane helper
 
@@ -266,3 +266,15 @@ depth steps and relative-depth islands. See [BOUNDARY.md](BOUNDARY.md) for input
 parameter units, stage uncertainty and public `render_debug` / `save_debug` methods
 on `BoundaryResult`. `examples/example_boundary.py` is a minimal in-memory example.
 Color evidence and relative relief do not establish wrinkles, layers or graspability.
+
+
+## Optional mask cleanup
+
+`cleanup_mask(object_mask, *, max_hole_area=0, smoothing_radius_px=0,
+observed_mask=None, protected_mask=None)` returns `MaskCleanupResult`. Both
+operations default to off; all existing detector behavior is unchanged. The
+NumPy-only helper preserves the original and reports exact added/removed pixels,
+small-hole fills and exterior-smoothing changes separately. Unknown and protected
+regions remain unchanged. Corrections are inferred geometry, not new sensor
+evidence. See [mask cleanup](MASK_CLEANUP.md) for input contracts, topology guards,
+uncertainty handling, failure cases, and RGB-D/outline integration.

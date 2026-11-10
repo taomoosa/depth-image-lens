@@ -114,9 +114,7 @@ it is not learned or calibrated uncertainty about physical identity.
 
 A shadow and a dark object can have identical RGB, so thresholds cannot guarantee
 separation even when their unshadowed material colors differ. Colored shadows,
-texture, registration error and deep darkness remain limitations. Existing real
-comparison references were reconstructed with target-mask assistance: their
-results contain target-information leakage and do not establish independent
-paired-background accuracy. Acquire genuine empty/current captures and appropriate
-object/shadow labels for site-specific calibration. No score proves a wrinkle,
-layer count, physical contact or grasp.
+texture, registration error and deep darkness remain limitations. Use independent
+empty/current captures and object/shadow labels for site-specific calibration; see
+[validation limits](BOUNDARY.md#method-scope). No score proves a wrinkle, layer count,
+physical contact or grasp.

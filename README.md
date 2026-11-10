@@ -2,10 +2,8 @@
 
 Experimental shape heuristics (NumPy-only core) for a suspended **deformable object** in static depth images. `BridgeDrapeDetector` estimates a bridge between two candidate anchors, large apparent sag, and left/right hanging extent. It does not verify physical holding, tension, or metric height above a table.
 
-The repository contains the implementation. No ZIP download is required.
-
 For site-specific adjustment, start with the [parameter and debug reference](TUNING.md):
-all public detector settings, units, interactions, uncertainty and explicit PNG output.
+detector settings, units, interactions, uncertainty and explicit PNG output.
 Defaults are provisional; the guide distinguishes image evidence from physical claims.
 
 ## Quickstart: two in-memory uint16 arrays
@@ -27,37 +25,6 @@ print(result.to_dict())
 Here `masked_difference = max(empty_background - current_depth, 0)` before any additional region exclusion. Finite difference zero means observed background/exclusion; current-depth zero means missing depth. The positive values highlight surfaces closer to the camera than the empty background. `16UC1` specifies a single-channel unsigned-16 type, **not a distance unit**: change `depth_scale_m` for a sensor with a different metres-per-count scale. The same scale applies to both arrays. Inputs are not modified, and noncontiguous views are accepted. Float conversion allocates separate metric buffers.
 
 For manual anchors, pass `hand_rois={"left": (...), "right": (...)}`. For missing background or visibility, also pass the appropriate bool `background_valid`/`observed_mask`; zero alone cannot preserve that provenance. The general `detect()`/`detect_auto()` APIs still require explicit m/mm units and never infer them from dtype.
-
-## Independent table-relative lift
-
-`LiftDetector` measures signed distance from a caller-supplied table plane. It needs rectified optical-axis depth, depth-camera intrinsics, an oriented plane in that same camera frame, and a deformable-object mask. It does **not** need hand ROIs, a difference image, or world/robot extrinsics. These calibration inputs are unnecessary for the image-relative bridge/sag detector above.
-
-```python
-from depth_image_lens import CameraIntrinsics, TablePlane, LiftDetector
-
-# Supply actual camera parameters and plane coefficients; do not copy a sample calibration.
-intrinsics = CameraIntrinsics(fx, fy, cx, cy)
-table = TablePlane((nx, ny, nz), offset_m)
-result = LiftDetector().detect_16uc1(
-    current_depth, intrinsics, table, object_mask,
-    depth_scale_m=0.001, whole_object_visible=False,
-)
-print(result.to_dict())
-```
-
-`state` describes visible-region elevation (`lifted`, `not_lifted`, `unknown`). `whole_object_lifted` is separate: visible elevation alone cannot prove the entire object is off the table. An observed near-table component can give whole-object `no` even in a partial view. This is geometric evidence, not proof of grasp success. Masks and intrinsics are caller inputs. The optional `fit_table_plane` helper fits a plane from a manually selected empty-table ROI; it does not perform semantic segmentation. See [the lift contract](API.md#table-relative-lift) and run `python examples/example_lift.py` for a synthetic oblique-plane example.
-
-To obtain the plane from an empty image rather than entering its coefficients:
-
-```python
-from depth_image_lens import fit_table_plane
-
-fit = fit_table_plane(empty_depth, intrinsics, table_mask, depth_scale_m=0.001)
-print(fit.to_dict())  # Inspect point count, metric residuals and warnings.
-result = LiftDetector().detect_16uc1(current_depth, intrinsics, fit.plane, object_mask)
-```
-
-The same explicit scale must be used for fit and detection. For float arrays already in metres, pass `depth_scale_m=1.0` to the fit and use `LiftDetector.detect`. The default orientation assumes the camera origin is on the above-table side. The ROI must contain only the empty table; clutter or a wall can yield a wrong plane even with small residuals. Refit after camera/table changes. See [fit details](API.md#empty-table-plane-helper).
 
 ## Install
 
@@ -126,7 +93,7 @@ depth-image-lens --input data/pair.npz --config examples/config.background.json 
 
 The CLI prints strict JSON and saves `result.json`, `arrays.npz` and `overlay.svg`. It always requests diagnostics. Set `"mode": "manual"` and add `hand_rois` for manual mode; the default is automatic candidates. Config mask paths are relative to the config file. Pickle/object arrays and nonfinite JSON constants are rejected. No input paths or user metadata are copied into the result or overlay. `python -m depth_image_lens.cli` is an equivalent entrypoint.
 
-Tune units/invalid values first, then the upper band and arm exclusion, foreground threshold, and sag/drape ratios. The synthetic U example returns yes/yes/both. Missing opposite evidence, clipping, invalid depth and excessive depth jumps can correctly return unknown; inspect [diagnostics](DIAGNOSTICS.md) before relaxing thresholds. A helper-generated difference is not evidence of real-image accuracy. No PNG/RGB-to-distance conversion is provided.
+Tune units/invalid values first, then the upper band and arm exclusion, foreground threshold, and sag/drape ratios. The synthetic U example returns yes/yes/both. Missing opposite evidence, clipping, invalid depth and excessive depth jumps can correctly return unknown; inspect [diagnostics](DEBUGGING.md#bridge-drape-diagnostics) before relaxing thresholds. A helper-generated difference is not evidence of real-image accuracy. No PNG/RGB-to-distance conversion is provided.
 
 ## Masked positive-foreground differences
 
@@ -142,290 +109,103 @@ The supplied positive values are used as-is. No sign inversion or physical backg
 
 The default `signed` mode and the optional `background_difference()` helper remain unchanged: they preserve explicit `background-current` / `current-background` handling and validate the implied physical background. These are different input contracts; only explicit `encoding="16UC1"` opts a raw background pair into clipped-positive preparation.
 
-## Inputs and outputs
-
-- Two matching arrays: current depth and either a signed physical difference or a masked positive-foreground difference. Select the input contract explicitly; see below.
-- Manual mode: caller-provided hand search ROIs. Automatic candidate mode: a coarse upper search band, with optional arm exclusion. Neither mode recognizes hands semantically.
-- Independent outputs: `bridge=yes/no/unknown`, `large_sag=yes/no/unknown`, and `drape=left/right/both/neither/unknown`, plus features, masks and reasons.
-- Intrinsics and world/robot calibration are not required for these image-relative estimates. Metric depth units are still required for depth thresholds.
-
-See [API and tuning](API.md), [bridge-first candidates and comparison](AUTO.md), and [diagnostic arrays and SVG overlays](DIAGNOSTICS.md).
-
-## Layout
-
-```text
-pyproject.toml
-src/depth_image_lens/  # single implementation and public exports
-examples/             # manual/automatic examples and configuration
-tests/               # synthetic regression and comparison
-API.md / AUTO.md
-LICENSE               # MIT
-bridge_drape.py       # minimal legacy import wrapper; install first
-```
-
-The source module is canonical; the root compatibility wrapper contains no detection logic. Local environments, historical archives and machine-specific records are ignored by Git.
-
-## Evidence and limitations
-
-Focused synthetic unit tests exercise API behavior, missingness and known
-limitations. They are not independent real observations or field-accuracy evidence.
-
-An arm shaped exactly like a bridge can produce the same depth evidence as a deformable object. An exclusion mask or other semantic input is required in that case. Unknown results include some true bridges. No matched real empty-background/current-depth pairs have been evaluated; real-image accuracy is unvalidated.
-
-## License
-
-Original project code is licensed under [MIT](LICENSE). NumPy is an external dependency under its own BSD-3-Clause license; it is not bundled here. Build tools keep their own licenses. No research images, datasets, third-party source copies or credentials are distributed in this repository. This inventory is not a legal guarantee concerning every possible downstream use.
-
-Tune units and validity first, then geometry ROIs and thresholds. Pixel lengths
-scale with image resolution, areas quadratically; metric thresholds and dimensionless
-ratios do not. Keep benchmarks, comparison runners and local HTML reviews outside
-the repository. No optimum or field accuracy is inferred from parameter adjustment.
-
-For optional file-based verification of the same uint16 contract:
+For the file-based uint16 convenience contract:
 
 ```bash
 depth-image-lens --depth data/current.npy --difference data/masked_difference.npy --config examples/config.16uc1.json --output debug-output
 ```
 
-This configuration declares `encoding="16UC1"` and one `depth_scale_m` (default 0.001). Do not mix this convenience setting with separate unit/sign settings. With `--background` instead, the CLI safely creates clipped uint16 differences and retains the validity mask before detection.
+This configuration declares `encoding="16UC1"` and one `depth_scale_m` (default
+0.001). Do not mix it with separate unit/sign settings. With `--background`, the
+CLI creates clipped uint16 differences and retains their validity mask.
 
-Bridge continuity tuning: manual and automatic modes now share `depth_jump_m`. Optional tiny-gap inference additionally checks raw depth through the gap and records inferred pixels separately from observed foreground. Inspect candidate decisions and the yellow/pink debug overlays before changing gap or depth thresholds; see [API details](API.md#bridge-depth-continuity-and-explicit-gap-inference). Automatic selection can continue to a second eligible candidate after rejecting the first discontinuous one.
+## Choose a workflow
 
+The core package requires only NumPy. OpenCV is optional for color-boundary,
+corner and outline processing and for PNG debug rendering:
 
-For close views with missing hands or the upper third cropped away, see the
-[close-view contract](AUTO.md#close-views-missing-hands-and-the-upper-third).
-Visible connection candidates can be used without full hand/arm visibility;
-clipped supports cannot be treated as absent or assigned a physical hand ID.
-`result.stage_results` keeps geometry measurements, inferred static support
-hypotheses and evidence warnings independently. See
-[feature-wise continuation](RGBD.md#independent-features-and-evidence-quality).
+```bash
+python -m pip install -e '.[boundary,corner,outline,debug]'
+```
 
+Use the guide for the evidence available in your application:
 
-## Optional registered color assistance
+| Task | Guide | Minimal example |
+|---|---|---|
+| Bridge, apparent sag and hanging extent | [API and input contract](API.md), [automatic anchors and close views](AUTO.md) | `examples/example_auto.py` |
+| Table-relative lift and empty-table plane fitting | [Calibrated lift](API.md#table-relative-lift) | `examples/example_lift.py` |
+| Seeded color assistance with independent depth evidence | [Registered RGB-D assistance](RGBD.md) | `examples/example_rgbd.py` |
+| Local hand/object contact hypotheses | [Independent grasp](GRASP.md) | `examples/example_grasp.py` |
+| Static support inference without visible hands | [Object-only inferred holding](OBJECT_GRASP.md) | `examples/example_object_grasp.py` |
+| Repeatable-pose gripper references | [Reference segmentation](REFERENCE.md) | `examples/example_reference_grasp.py` |
+| Elevated and nonflat surface evidence | [Surface inspection](SURFACE.md) | `examples/example_surface.py` |
+| Visible overhead corner candidates | [Corners](CORNER.md) | `examples/example_corner.py` |
+| Color boundaries, depth steps and relative-depth islands | [Overhead boundaries](BOUNDARY.md) | `examples/example_boundary.py` |
+| Ordered exterior contours and length queries | [Outlines](OUTLINE.md) | `examples/example_outline.py` |
+| Open-reference to partial-exterior matching | [Outline matching](OUTLINE_MATCH.md), [corner-based matching](CORNER_OUTLINE_MATCH.md) | `examples/example_outline_match_sources.py` |
+| Current/empty RGB-D foreground masks | [Background segmentation](RGBD_BACKGROUND.md) | `examples/example_rgbd_background.py` |
+| Optional small-hole filling and mask exterior smoothing | [Mask cleanup](MASK_CLEANUP.md) | `examples/example_mask_cleanup.py` |
+| Supported overhead pick geometry | [Pick candidates](PICK_CANDIDATES.md) | `examples/example_pick_candidate.py` |
+| Raised outer-edge bands | [Edge bulge evidence](EDGE_BULGE.md) | `examples/example_edge_bulge.py` |
 
-`SeededColorAssistant` accepts the same uint16 depth/difference arrays plus
-registered RGB/BGR color and caller-provided object/hand seed masks. It returns
-appearance candidates and unknown pixels, retaining the independent depth-only
-result. See [RGBD.md](RGBD.md) for ndarray inputs, the small integration example,
-the input contract and important real-image limitations. It adds no
-runtime dependency and does not establish physical grasp or hand identity.
+Additional boundary guides cover [separate color/brightness tolerances](BACKGROUND_TOLERANCES.md),
+[seeded shadow hypotheses](BOUNDARY_SHADOW.md), [continuity and topology](BOUNDARY_TOPOLOGY.md)
+and [outer-proximity selection](BOUNDARY_PROXIMITY.md).
 
-The RGB-D example keeps sensor validity separate from appearance uncertainty;
-optional route checks do not replace the independent depth-only result.
+For image-column selection, run `python examples/example_vertical_interior.py --x 16`.
+The [column-selection contract](OUTLINE.md#select-an-interior-point-in-one-column)
+explains exact component masks, visible-run clearance and clipping limitations.
 
-## Optional overhead corner candidates
+## Tune and inspect results
 
-`OverheadCornerDetector` accepts registered RGB/BGR and optical-axis depth, with
-a supplied object mask or matched empty-scene color. It compares polygon angles,
-local line fits and local depth checks. Accepted corners are not proof of a single
-layer or safe grasping. The optional `corner` extra uses OpenCV (Apache-2.0); the
-base package still needs only NumPy. See [CORNER.md](CORNER.md) for the ndarray
-API, runnable example and limitations. Field improvement is not established.
-External research data and evaluation outputs are not distributed in this repo.
+- [Parameter reference](TUNING.md): defaults, units, interactions and call-time controls.
+- [RGB-D/pick tuning](RGBD_PICK_TUNING.md): input checks, settings, symptoms,
+  per-pixel evidence and [fixed settings across captures](RGBD_PICK_TUNING.md#fixed-settings-across-captures).
+- [Diagnostics and debug output](DEBUGGING.md): arrays, strict JSON, SVG overlays
+  and optional PNG rendering. Detection never writes files automatically.
+- [Dark shadows and nearer occluders](RGBD_BACKGROUND.md#dark-shadows-and-much-nearer-objects):
+  depth-band filtering and its thin-object/missing-depth tradeoffs.
 
-Corner support refinement is available as `support_policy="adaptive"`; fixed
-support remains the default. See [the bounded support contract](CORNER.md#bounded-adaptive-support-opt-in).
+Run `python examples/example_rgbd_pick_tuning.py --help` for the registered
+current/empty NPZ workflow. It records settings, masks, contour IDs, representative
+points and numeric evidence in a new output directory.
+
+Tune units, registration and validity first, then geometry regions and thresholds.
+Pixel lengths scale with image resolution and pixel areas scale quadratically;
+metric thresholds and dimensionless ratios do not. Keep uncertainty separate from
+measured absence. A lower unknown rate is not proof of better detection.
+
+## Evidence and limitations
+
+The library provides experimental geometric and appearance heuristics, not physical
+grasp verification, semantic hand recognition, hidden-layer counts or robot control.
+Bridge/sag/drape are image-relative; calibrated table-normal height requires the
+separate lift API. Same-sized arrays do not establish registration or synchronization.
+
+Focused synthetic unit tests exercise public API behavior, missingness and known
+counterexamples. They do not establish real-image accuracy, sensor calibration,
+physical grasp success or throughput. Defaults require validation on independent,
+representative captures from the deployment setup.
+
+An arm shaped like a bridge can produce the same depth evidence as a deformable
+object. Supply semantic exclusions where needed. Cropping, missing depth, occlusion
+and ambiguous appearance can legitimately leave results unknown. Feature guides
+state the additional assumptions for each workflow.
 
 ## Repository scope
 
-Keep library code, focused unit tests with small synthetic fixtures, and minimal
-API examples here. Evaluation runners, parameter grids, timing benchmarks, dataset
-intake/annotation tools, detailed research reports and HTML/image galleries belong
-in a separate local evaluation directory, not Git. Review generated HTML locally;
-no upload is required. Historical evaluation copies are preserved externally and
-Git history is not rewritten. Public tests and examples need no external evaluation
-files. `examples/example_rgbd.py` retains reusable integration helpers and a small
-ndarray example, not a benchmark runner.
+- `src/depth_image_lens/`: canonical implementation and public exports.
+- `examples/`: minimal runnable API workflows and configuration examples.
+- `tests/`: focused regression tests with synthetic fixtures.
+- Root Markdown guides: public usage, input contracts and tuning reference.
+- `bridge_drape.py`: compatibility import wrapper; install the package first.
 
-## Independent image-side grasp estimates
+Keep datasets, private captures, benchmark/parameter-search runners, investigation
+reports and generated galleries outside the public source tree. Tests and examples
+do not require external evaluation files. Local environments and generated outputs
+are ignored by Git.
 
-`IndependentGraspDetector` uses separated hand/object masks and local depth
-consistency to return left/right visual grasp hypotheses independently, without
-bridge or sag prerequisites. Physical grasp remains unverified. See
-[the simple-mode contract](GRASP.md) and `examples/example_grasp.py`.
+## License
 
-
-Corner proposal coverage can be explored with the optional
-`proposal_policy="multiscale"`; the existing `"single"` default remains available.
-See [multiscale exterior proposals](CORNER.md#optional-multiscale-exterior-proposals)
-for epsilon scaling, deduplication and limitations.
-
-
-Corner tuning has an explicit opt-in starting preset:
-`OverheadCornerDetector.recommended_for_tuning()`. It uses multiscale proposals,
-bounded adaptive support and diagnostic-only long/short angle difference. Ordinary
-constructor defaults stay compatible. Independent proposal/fitted angle,
-intersection shift, minimum support and internal-step/boundary thresholds are
-listed in [CORNER.md](CORNER.md#explicit-recommended-starting-preset). This is a
-starting point for real-data tuning, not a calibrated confidence score or a
-measurement of table-relative height or usable grasp area.
-
-
-## Object-only inferred holding
-
-`ObjectOnlyGraspDetector` needs no visible hands: under an explicit static
-suspension rule, sufficient reference elevation implies inferred holding and
-sufficient same-component visible width implies inferred bilateral support.
-Use a selected object mask plus current depth and either an empty-background
-difference or a calibrated table plane. A missing reference remains unknown.
-These are configurable shape rules, not physical grasp verification; existing
-`IndependentGraspDetector` behavior is unchanged. See [OBJECT_GRASP.md](OBJECT_GRASP.md)
-and `python examples/example_object_grasp.py`.
-
-Corner results also provide `result.render_debug(color, color_order="RGB")` and
-explicit `result.save_debug("corner-debug.png", color, color_order="RGB")`.
-See [Corner rendering and input contracts](CORNER.md#render-and-save-debug-images)
-and `examples/example_corner_debug.py`. Detection itself never writes files.
-
-## Reference separation, surface inspection and debug views
-
-- [ReferenceGripperSegmenter](REFERENCE.md): one-time coarse boxes plus independent
-  empty/gripper-only captures per known pose; independent side uncertainty.
-- [DepthSurfaceDetector](SURFACE.md): calibrated height or same-pixel separation
-  and local nonflat evidence. Physical multilayer overlap remains unknown.
-- [Common result render/save](DEBUGGING.md): explicit PNG output and tuning
-  measurements for all spatial public results; optional OpenCV debug extra.
-- [Partial gripper context](OBJECT_GRASP.md): exclude gripper candidates before
-  object width, inspect area/span ratios without claiming physical grasp proof.
-
-These are experimental workflows. Repeatable-pose reference segmentation has not
-been validated on independent real reference pairs. No automatic free-view hand
-recognition, pose tracking or layer-count estimator is provided.
-
-## Overhead internal boundaries
-
-`OverheadBoundaryDetector` independently measures color foreground, local darkness,
-depth steps and relative-depth islands. See [BOUNDARY.md](BOUNDARY.md) for inputs,
-parameter units, stage uncertainty and public `render_debug` / `save_debug` methods
-on `BoundaryResult`. `examples/example_boundary.py` is a minimal in-memory example.
-Color evidence and relative relief do not establish wrinkles, layers or graspability.
-
-The optional [boundary topology API](BOUNDARY_TOPOLOGY.md) adds tunable weak-edge
-continuation, bounded inferred connections, ordered centerlines, corners and
-junctions while preserving the measured boundary masks.
-
-## Ordered external silhouette
-
-`OuterContourDetector` accepts a bool object mask and returns each component's raw
-closed contour plus a cyclic sequence of straight/curved/unknown sections and
-corner events. Optional calibrated depth adds observed 3D lengths; pixel geometry
-still works without depth. `result.query_edge_length(...)` finds visible straight
-intervals near a requested length, not original material-edge identity. Frame/ROI
-clipping, holes, missing depth and self-touch ambiguity are explicit. See
-[parameters, output and debug examples](OUTLINE.md) and run
-`python examples/example_outline.py`. Requires the optional `outline` OpenCV extra.
-
-`outline_result.match_partial(target_points_xy)` matches an open reference to a
-continuous exterior arc, with position/rotation/scale invariance and optional
-bounded sleeve articulation. It reports mismatch, missing evidence and competing
-locations separately. See [partial outline matching](OUTLINE_MATCH.md) and
-`examples/example_outline_match.py` for diagnostics and synthetic controls.
-Opt in with `matcher=CornerOutlineMatcher()` to align interior bends and report
-global/sleeve rotation, separate target-axis scales and per-edge errors. See
-[corner-based matching](CORNER_OUTLINE_MATCH.md) and
-`examples/example_corner_outline_match.py`; it requires at least three
-non-collinear interior bends and retains explicit ambiguity checks.
-Its optional `max_skipped_corners=1` or `2` tolerates extra current bends while
-keeping their geometry in edge checks; see `examples/example_corner_outline_skips.py`
-for bounded-search timing and fold controls.
-For class-by-class connections from Boundary, Corner, RGBD, reference, color,
-surface, pick and other existing results, run
-`python examples/example_outline_match_sources.py`. It demonstrates mask and
-ordered-closed-contour routes while preserving observation/exclusion information.
-
-Boundary topology also supports [outer-proximity selection](BOUNDARY_PROXIMITY.md):
-keep/exclude/pending lists based on observed near-edge fraction, retaining the
-original graph and measurements with explicit hole/ROI policies and debug comparison.
-
-
-## Select an interior point in one column
-
-Run `python examples/example_vertical_interior.py --x 16` from the repository
-root. This NumPy example selects `[16, 16]` in the inclusive run `[12, 21]`, with
-vertical clearance `4` pixels. It uses only the selected column, not 2D distance
-or horizontal clearance. Add `--from-boundary-result` to demonstrate a
-`BoundaryResult.object_mask`, or `--largest-contour` to restrict to the largest
-visible connected component (these flags require optional OpenCV).
-
-```python
-from examples.example_vertical_interior import (
-    select_vertical_interior, contour_component_mask,
-)
-
-selection = select_vertical_interior(boundary_result.object_mask, x=16)
-# Or restrict an OuterContourResult to one component before selecting:
-component = contour_component_mask(outline_result)  # Largest polygon area.
-# component = contour_component_mask(outline_result, contour_id=chosen_id)
-selection = select_vertical_interior(component, x=16)
-if selection is not None:
-    x, y = selection["point_xy"]
-    print(selection["run_y_inclusive"], selection["vertical_clearance_px"])
-```
-
-The column-selection helper lives in the example. The component helper now
-delegates to the installed `outline_result.component_mask(contour_id)` method.
-IDs are looked up, not treated as list indices or connected-component labels. The component
-helper labels `object_mask & observed_mask` with 8-connectivity and selects the
-label at a raw contour point. It preserves holes and excludes separate objects
-inside those holes; filling an external polygon would not do this. Touching
-objects in one component remain inseparable. An empty outline gives an empty
-mask; an unknown explicit contour ID raises `ValueError`. Missing or malformed
-contour start points, noninteger coordinates and coordinates outside the mask
-grid also raise `ValueError` before component lookup.
-
-Each contiguous True run in the column is considered separately. Choose the
-longest run, then the topmost for equal lengths, and the upper middle pixel for
-even lengths. `vertical_clearance_px = min(y - start, end - y)` measures distance
-between foreground pixel centers: endpoints and singletons have clearance zero.
-It is **not** distance to the first background pixel or a subpixel material edge.
-All-False columns return `None`; invalid mask type/shape or x raises `ValueError`.
-Top/bottom image contact sets `truncated=True`; reported clearance then describes
-only visible support, not a known physical edge. Artificial internal ROI cuts
-need caller interpretation; side-edge proximity never affects this calculation.
-
-## Current and empty-scene RGB-D masks
-
-`RGBDBackgroundSegmenter` combines registered current/empty color and depth pairs
-into a bool object mask for `OuterContourDetector` or `OverheadBoundaryDetector`.
-Depth can recover same-color objects; color can retain thin or missing-depth
-candidates with explicit uncertainty. It preserves holes and multiple components,
-with tunable color/depth thresholds and a depth-required option for stricter
-shadow rejection. See [input contracts, fusion and limits](RGBD_BACKGROUND.md)
-and `examples/example_rgbd_background.py`. Synthetic coverage does not establish
-real-image contour accuracy.
-
-For color cross-checking of depth candidates, opt into `fusion_mode='evidence'`.
-It records accepted, suppressed and unresolved evidence while retaining strong
-supported same-color depth candidates. See [decision rules and limitations](RGBD_BACKGROUND.md#evidence-fusion)
-and `examples/example_rgbd_fusion.py` for comparisons with the existing modes.
-
-For weak color edges near strict chroma seeds, `fusion_mode='color_seeded'` adds
-bounded, depth-supported color growth without whole-mask smoothing. Every addition
-is uncertain; unseeded same-color objects can be lost. See [bounded growth and its
-limits](RGBD_BACKGROUND.md#bounded-color-growth) and the minimal
-`examples/example_rgbd_seeded.py`. Independent real-image accuracy is unvalidated.
-
-## Supported overhead pick geometry
-
-`OverheadPickCandidateDetector` uses current/empty depth inside one selected
-`OuterContourResult` component to return elevated, locally supported regions and
-near-camera representative pixels. It guards contour edges, holes and missing
-depth, retains uncertainty, and rejects small/narrow regions. The installed
-`outline.component_mask(contour_id)` method also exposes exact component masks.
-See [contracts, tuning and counterexamples](PICK_CANDIDATES.md) and
-`examples/example_pick_candidate.py`. These are geometric candidates; physical
-pinch suitability remains unverified, including for elevated flat sheets.
-
-For step-by-step parameter adjustment and debugging of both stages, use
-[the RGB-D/pick tuning guide](RGBD_PICK_TUNING.md) and
-`examples/example_rgbd_pick_tuning.py`. The example accepts your registered
-current/empty NPZ arrays and JSON settings, and records masks, contour IDs,
-representative points and per-pixel evidence in a new output directory.
-
-- [Outer-edge bulge evidence](EDGE_BULGE.md): compare a raised outer band with the observed inward surface, with diagnostic reference masks.
-
-For very dark table shadows and nearer/invalid-depth occluders, see
-[the existing-API depth-band workflow](RGBD_SHADOW_OCCLUDERS.md) and
-`examples/example_rgbd_shadow_occluders.py`. It preserves unknown occlusions and
-explicitly trades thin/missing-depth recall for stricter depth evidence; library
-defaults are unchanged.
+Original project code is licensed under [MIT](LICENSE). NumPy and optional OpenCV
+are external dependencies under their own licenses and are not bundled here.

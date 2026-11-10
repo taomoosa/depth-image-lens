@@ -4,7 +4,7 @@
 replacing the original measured color/depth boundary masks, lines, islands or
 metrics. The default is off, so existing callers retain their detection behavior.
 This is a graph of image evidence, not a semantic wrinkle map or physical boundary
-identity tracker. The `BOUNDARY.md` input/registration/missingness contracts apply.
+identity tracker. The [boundary input, registration and missingness contracts](BOUNDARY.md) apply.
 
 ```python
 from depth_image_lens import OverheadBoundaryDetector
@@ -91,13 +91,13 @@ sizes. Resizing changes the needed pixel lengths. Skeleton endpoint retreat mean
 a 3-column gap in a thick painted band can require a larger centerline gap setting.
 Inspect the reported `missing_pixels` rather than assuming equality to a painted gap.
 The example values above demonstrate sensitivity, not a universal recommended preset.
-Start at weak ratio1 and gap0; inspect strong evidence, then lower the weak ratio
-modestly. In textured scenes, ratio0.5 can dramatically increase spurious branches.
+Start at weak ratio 1 and gap 0; inspect strong evidence, then lower the weak ratio
+modestly. In textured scenes, ratio 0.5 can dramatically increase spurious branches.
 Enable gaps last, keep direction tolerance small and inspect orange inferred points.
 Tune corner window for the image resolution before choosing turn threshold. Do not
 reduce fragmentation by accepting arbitrary parallel/crossing connections.
 
-Work is bounded: over250,000 retained pixels or over50,000 skeleton pixels produces
+Work is bounded: over 250,000 retained pixels or over 50,000 skeleton pixels produces
 an explicit topology `insufficient` status/reason, while original detection outputs
 remain available. Resize or restrict the domain instead of treating empty graph
 fields as absence of a boundary. These limits are computational guards, not confidence.
@@ -269,8 +269,7 @@ Debug output adds separate color/depth graph views: green strong, blue weak, ora
 inferred, magenta corners, yellow junctions, pale endpoints. Optional
 `topology_labels=True` displays node IDs; dense graphs can be cluttered. It preserves
 RGB/BGR output conventions and explicit non-overwriting save behavior.
-`examples/example_boundary_topology.py` is a minimal analytic example. Dataset-specific
-comparison scripts and real image galleries remain outside Git.
+`examples/example_boundary_topology.py` is a minimal analytic example.
 
 ## Method references and limits
 
@@ -281,9 +280,9 @@ with Canny. Zhang-Suen thinning is a standard binary thinning method also docume
 by [OpenCV](https://docs.opencv.org/4.13.0/df/d2d/group__ximgproc.html); this small
 NumPy implementation introduces no contrib dependency or copied external code.
 Topology preserves image evidence, including undesired prints/seams/shadows. It does
-not establish physical wrinkle/overlap correctness. Existing real datasets have no
-internal line/junction annotations, so real comparisons measure sensitivity and
-operational consistency, not accuracy.
+not establish physical wrinkle/overlap correctness. Measuring accuracy requires
+independent internal line/junction annotations; see
+[validation limits](BOUNDARY.md#method-scope).
 
 A path that returns to the same junction has two incident arms. Junction `arms`
 records `segment_id` and `end` (`start`/`end`); `branch_angles_deg[].arms` indexes
@@ -301,9 +300,8 @@ missing connectivity. The raw graph must remain available.
 integer (0..20 processing pixels) to request `graph['junction_grouping']`. This
 never merges or deletes `nodes`, `segments`, raw counts, masks or measurements.
 It adds disjoint two-node grouping **hypotheses**, with `grouped_junction_count`
-for consumers choosing that coarser representation. Example: a reviewed thick X
-has two raw junctions 4px apart; value4 yields one group with four external arms.
-Value3 leaves them separate. This is not a universal recommended tolerance.
+for consumers choosing that coarser representation. For example, an eligible pair linked by a 4 px observed connector can group at
+value 4 but not value 3. This is not a universal recommended tolerance.
 
 Only two degree-three junctions linked by one short, entirely observed segment
 are eligible. Their four distinct external arms must have enough observed,
@@ -316,13 +314,11 @@ intersection. Competing candidate groups sharing a node are all rejected.
 
 | Parameter (default) | Effect |
 |---|---|
-| `junction_cluster_px=0` | Integer0..20; maximum observed connector arclength; larger values consider more distant junction pairs and move fit support outward |
+| `junction_cluster_px=0` | Integer 0..20; maximum observed connector arclength; larger values consider more distant junction pairs and move fit support outward |
 | `junction_cluster_residual_px=1` | (0,3] pixels; maximum arm-line and common-intersection perpendicular residual; also bounds intersection extension outside the connector bounding box |
-| `junction_cluster_angle_deg=15` | [0,45] degrees; maximum deviation from180 degrees for each opposing pair; larger is less restrictive |
+| `junction_cluster_angle_deg=15` | [0,45] degrees; maximum deviation from 180 degrees for each opposing pair; larger is less restrictive |
 
-The regression set keeps same-side and opposing nearby T nodes separate at the
-provisional residual1px/angle15deg settings. These checks cannot prove one physical
-crossing: genuinely distinct junctions with indistinguishable image geometry may
+These geometric checks cannot prove one physical crossing: genuinely distinct junctions with indistinguishable image geometry may
 still satisfy them. Raising residual tolerance can group offset distinct T nodes.
 Leave grouping disabled unless the chosen resolution and real examples justify it.
 Short external arms, curves, missing support or complex junction clusters may

@@ -96,12 +96,9 @@ HxW arrays include `shadow_candidate_mask`, `shadow_suppressed_mask`,
 
 ## Evidence limits
 
-Controlled synthetic cases can measure retention and shadow false positives.
-Existing real samples have no verified independent empty-scene pairs; reconstructed
-backgrounds using target masks leak target information, and digital shadows are
-perturbations of the same source, not new real observations. These tests do not
-establish field segmentation accuracy. Capture independent empty/current pairs
-under the actual camera and lighting before deployment. Printed surfaces, colored
+Validate retention and shadow false positives with independent empty/current pairs
+under the actual camera and lighting; see [validation limits](BOUNDARY.md#method-scope).
+Printed surfaces, colored
 shadows, saturation, deep darkness, changed camera pose and contaminated samples
 violate or weaken the assumptions. A single uniform sample does not identify every
 object pixel or distinguish a second dark object from shadow.

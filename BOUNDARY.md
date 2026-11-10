@@ -42,8 +42,8 @@ with `background_color`: the mask wins and the unused reference is reported as i
   background. All probable labels inside remain marked uncertain. The rectangle must
   include the whole visible target and leave real background outside. It is not a
   perfect mask requirement, but clutter/same-color/cropped targets can still fail.
-  OpenCV initialization can vary; the external replay tool sets a process RNG seed
-  and records it. The library does not reset global OpenCV RNG state.
+  OpenCV initialization can vary. For reproducible runs, set and record a process
+  RNG seed; the library does not reset global OpenCV RNG state.
 - `object_mask`: bool HxW visible deformable-object region supplied by the caller.
   This overrides segmentation only, not the boundary/depth calculations.
 - None: outer `border_px` pixels are assumed to sample table. This assumption is
@@ -142,11 +142,8 @@ separately. With diagnostics off, stage summaries remain but reference maps are 
 retained. Detection does not mutate either input or write files.
 
 `examples/example_boundary_background.py` demonstrates these controls using a small
-synthetic pair. Existing real datasets used during development have no verified
-independent empty-scene pairs. Reconstructed backgrounds and nonempty real reference
-pairs test behavior and failure modes; they do not establish real paired-reference
-segmentation accuracy. Acquire and label a small independent pair set in the target
-camera setup before relying on this mode.
+synthetic pair. Before relying on this mode, acquire and label independent
+empty/current pairs in the target camera setup; see [validation limits](#method-scope).
 
 ## Independent stages and outputs
 
@@ -238,10 +235,8 @@ All defaults are provisional, not sensor-calibrated accuracy guarantees. Save
    Do not improve apparent recall merely by swallowing missing depth or large domains.
 
 `examples/example_boundary.py` generates a small analytic scene and optionally saves
-its debug image. Dataset loaders and the local human comparison tool intentionally
-live outside Git; their evaluation report records source licenses, hashes, split,
-resolution, configs and exact commands. No pretrained model, external source code,
-images or dataset-specific paths are bundled here.
+its debug image. For reproducible evaluation, record input provenance, resolution,
+configuration and exact commands alongside the results.
 
 ## Method scope
 
@@ -255,6 +250,12 @@ implementation uses black-hat/gradient measurements instead of treating Canny ed
 as wrinkles. Inverse-Z detrending follows the pinhole plane equation; it does not
 recover hidden surfaces or distinguish aligned layers. Real supplied-mask consistency
 and qualitative depth evidence are different from annotated wrinkle/overlap accuracy.
+
+Synthetic examples test API contracts and failure modes, not field accuracy. Validate
+with independent captures and task-appropriate object, shadow or boundary labels
+from the target camera setup. Backgrounds reconstructed using target masks leak
+target information; digital perturbations of one image are not independent real
+observations. Neither establishes paired-background segmentation accuracy.
 
 ## Optional continuity and topology
 
