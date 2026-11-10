@@ -73,7 +73,8 @@ A pixel is color foreground if `(dC/Tc)^2 + (dL/Tl)^2 > 1`. These units are not
 standardized Delta E. A larger luma tolerance reduces brightness/shadow sensitivity
 but also misses brightness-only objects. Existing saturation/clipping diagnostics
 are retained. `background_score_margin` marks proximity of the ellipse radius to
-1 as uncertain; it does not change selection.
+1 as uncertain; it does not change legacy selection. Evidence mode additionally
+uses this margin to gate color confirmation/background agreement and chroma-only selection.
 
 Depth: `dZ = empty_depth_m - current_depth_m`. Positive means closer to the
 camera, not height normal to a table. Depth foreground requires `dZ > T`.
@@ -86,22 +87,214 @@ threshold are flagged uncertain, whether selected or not.
 | --- | --- |
 | `fusion_mode='union'` (default) | Depth foreground OR color foreground, with a farther-depth veto on the color contribution. Same-color objects can be found from depth; thin objects can be found from color. |
 | `fusion_mode='depth_required'` | Only depth foreground. Reduces shadow-driven selection, but misses objects below the depth threshold or with missing depth. |
-| `missing_depth_policy='color'` (default) | In union mode, retain color-only candidates where either depth is missing, marked uncertain. |
+| `fusion_mode='evidence'` | Cross-check color and depth, retaining strong supported same-color depth while suppressing unsupported depth with background-color agreement. See the decision rules below. |
+| `fusion_mode='color_seeded'` | Preserve strict chroma seeds, then add only nearby relaxed-color pixels with locally supported foreground depth. See [bounded color growth](#bounded-color-growth). |
+| `missing_depth_policy='color'` (default) | In union/evidence/color_seeded modes, retain that mode's color-only candidates where either depth is missing, marked uncertain. |
 | `missing_depth_policy='unknown'` | Require valid depth even for color candidates; missing depth is unobserved. In depth_required mode, depth is required regardless of this setting. |
 
 Color-only pixels remain uncertain even when depth is valid. Farther changes are
 also uncertain; `conflict_mask` records color foreground at farther-depth pixels.
-Valid-depth foreground remains selectable when color is missing or rejected.
+In legacy modes, valid-depth foreground remains selectable when color is missing or rejected.
 Missing either modality and clipped/near-threshold evidence are marked uncertain.
 `uncertain_mask` is independent of `object_mask`: uncertainty does not automatically
 remove a candidate. Unselected pixels without uncertainty merely lack a detected
 change under the declared model; they are not certified background.
 
 No closing, erosion, polygon filling or inferred depth filling is applied.
-Nonconvex shapes, holes, small thin features and multiple components are retained
-as measured. Optional `min_object_area` removes 8-connected components smaller
+Only color_seeded performs bounded mask growth, described below.
+In legacy modes, nonconvex shapes, holes, small thin features and multiple components
+are retained as measured. Evidence mode can reject insufficiently supported pixels.
+Optional `min_object_area` removes 8-connected components smaller
 than that pixel count and marks the discarded pixels uncertain. Default 1 removes
 nothing. Diagonally touching objects still form one component.
+
+## Evidence fusion
+
+Opt in with `RGBDBackgroundSegmenter(fusion_mode='evidence')`. The default remains
+`union`. This mode changes selection by evidence, not by eroding a fixed boundary
+band. It can still lose real features when evidence is insufficient. It does not
+align images, estimate temporal stability, certify material edges, or compute
+calibrated correctness probabilities.
+
+Color is **usable for confirmation or background agreement** only when the
+reference is usable, both color validity masks are True, and the pixel is neither
+clipped nor within `background_score_margin` of the Lab ellipse threshold.
+Here “reliable” in diagnostic names means those gates passed, not that the color
+is physically correct. Unclipped shadows and color registration errors can pass.
+
+Depth foreground still means `dZ > depth_threshold_m`. Strong depth additionally
+requires `dZ / depth_threshold_m >= strong_depth_ratio`. Local support counts
+neighboring depth-foreground pixels whose **depth difference dZ** agrees with the
+center within `depth_support_tolerance_m`. The denominator is the entire
+`(2*depth_support_radius_px+1)^2 - 1` neighborhood, excluding the center.
+Missing, background, outside-ROI and outside-image positions contribute zero.
+This tests the relative change, not smoothness of absolute camera Z; a coherent
+reference error can pass. There is no recursive mask propagation or filling.
+
+Rules are applied per pixel; reasons 1–5 are mutually exclusive:
+
+| Code | Evidence | Decision |
+| --- | --- | --- |
+| 1 | Depth foreground and reliable color foreground | Select; existing threshold/missing uncertainty remains. Luma-only color can confirm depth. Local support is not required in this branch, preserving color-confirmed narrow features. |
+| 2 | No color confirmation, but strong AND locally supported depth | Select with uncertainty, including same-color objects. Color background agreement does not veto this branch. |
+| 3 | No depth foreground/farther veto, reliable chroma change `dC/Tc > 1 + background_score_margin` | Select a color-only candidate with uncertainty; missing depth follows `missing_depth_policy`. |
+| 4 | Remaining depth foreground with reliable background-color agreement: strength OR local support is insufficient | Suppress from object_mask, set suppressed_mask AND uncertainty. This is insufficient evidence for selection, not proof of background. |
+| 5 | Remaining depth/color candidate | Defer from object_mask, set deferred_mask AND uncertainty. Includes luma-only changes, unusable color with weak depth, and farther/color conflict. |
+| 0 | No candidate or unavailable | No selection; consult availability and uncertainty to distinguish these cases. |
+| 6 | Selected pixel subsequently removed by min_object_area | Area-filtered; takes precedence over selection reasons 1–3. |
+
+`conflict_mask` retains its existing narrow meaning: color foreground plus farther
+depth. Use `suppressed_mask`, `deferred_mask`, and diagnostic reasons for the new
+disagreements. No-color foreground is not itself a conflict: same-color objects exist.
+
+The strong-depth setting applies only to evidence selection. The three depth-support
+settings are shared with color_seeded growth; all settings
+are validated and recorded in every mode:
+
+| Setting | Default; type, units, range | Increase / decrease |
+| --- | --- | --- |
+| `strong_depth_ratio` | 3.0; finite number, dimensionless, >=1 | Increase requires larger dZ for depth-only selection; decrease recovers shallower same-color objects but admits more bias/noise. Effective strong threshold is ratio × depth_threshold_m (default 15 mm). Depth foreground must still strictly exceed T. |
+| `depth_support_radius_px` | 1; Python int, processing pixels, 1..5 | Increase examines a wider square and may reject small/narrow objects; it is not guaranteed monotonic because the denominator also grows. Cost increases with square area. |
+| `depth_support_fraction` | 0.25; finite number, fraction, (0,1] | Increase needs more agreeing neighbors; decrease preserves thin shapes but admits small artifacts. At radius 1, default requires 2 of 8 neighbors, so rectangular corners with 3 neighbors survive. |
+| `depth_support_tolerance_m` | 0.003; finite number, metres, >=0 | Increase accepts more dZ variation, preserving slopes/noise but weakening support discrimination. Decrease requires closer agreement; zero requires exact floating-point equality. |
+
+All numeric settings reject bool, NaN and infinity. Existing Tc/Tl, score margin,
+T, missing policy, ROI, reference-check and area-filter settings remain relevant.
+For tuning order and failure symptoms see [the Japanese guide](RGBD_PICK_TUNING.md#色とdepthを照合するevidenceモード).
+
+```python
+seg = RGBDBackgroundSegmenter(fusion_mode='evidence').detect(
+    current_color, current_depth,
+    background_color=empty_color, background_depth=empty_depth,
+    color_order='RGB', registered_to_depth=True, depth_scale_m=.001,
+    diagnostics=True,
+)
+outline = OuterContourDetector().detect(
+    seg.object_mask, observed_mask=seg.outline_observed_mask,
+)
+seg.save_debug('fusion.png', current_color)
+reasons = seg.diagnostics['fusion_decision']  # uint8 codes above
+support = seg.diagnostics['depth_support_fraction']  # fraction, not probability
+```
+
+`observed_mask` still means input availability under the policy.
+`outline_observed_mask` is a new computed mask: observed minus suppressed and
+deferred pixels. This prevents the rejected/unresolved pixels from being silently
+treated as observed background when extracting corners/segments. Use the original
+selected `object_mask`, not an eroded mask, and do not exclude **all** uncertain
+pixels: selected same-color or color-only shapes would disappear. Unknown cuts
+can split contours; their corners/segments are not guaranteed physical edges.
+Both new masks are False in legacy modes, so this property equals observed_mask
+there. Area filtering keeps its existing behavior and is reported separately.
+
+For pick, pass the resulting outline and `segmentation_uncertain_mask=seg.uncertain_mask`
+along with depth validity under the usual pick contract. Selected depth-only and
+color-only evidence remains uncertain, so it will not provide trusted pick support;
+a wholly same-color shape can produce `unknown` / no pick candidate. Do not clear
+uncertainty merely to force a pick. Outline geometry and trusted grasp evidence
+are different outputs.
+
+With `diagnostics=True`, reasons, support fraction, strong/support masks, reliable
+color foreground/background masks, and accepted-both/depth-only/color-only masks
+are recorded. Accepted masks reflect the final area filter. `stages['fusion']`
+contains the reason legend; `metrics['decision_counts']` counts each reason.
+Suppressed/deferred masks and counts are available without diagnostics. Debug PNGs
+include a dedicated color-coded decision panel even if generic mask thumbnails
+are truncated. Numeric support fractions are in arrays, not rendered as a heatmap.
+
+Run `PYTHONPATH=src python examples/example_rgbd_fusion.py` for 11 generated cases
+and all three modes. `--output-dir /existing/parent/new-directory` saves a comparison
+JSON, per-case JSON/NPZ, and PNGs. It explicitly includes failures: true same-color
+1-pixel line endpoints can be suppressed; weak same-color objects can disappear;
+shadow plus depth bias can satisfy both modalities; colored misalignment artifacts
+remain uncertain candidates; strong coherent depth bias can look exactly like a
+same-color object. Single pairs cannot resolve these ambiguities. These are rule
+comparisons, not actual-pair precision/recall measurements.
+
+## Bounded color growth
+
+`fusion_mode='color_seeded'` is an opt-in alternative for a chromatically distinct
+object whose strict color mask has weak edges or small observation holes. It is
+not a replacement for same-color depth segmentation. The default stays `union`;
+`union`, `depth_required`, and `evidence` selection rules are unchanged.
+
+The mode never smooths the entire mask, fills a hole merely because it is enclosed,
+or invents depth. It combines a local threshold relaxation with bounded,
+8-connected growth:
+
+1. **Seeds:** usable, unclipped color with `dC/Tc > 1 + background_score_margin`,
+   outside the existing color uncertainty margin. Luminance change alone cannot
+   seed an object, even with strong depth. Farther depth vetoes seeds. Missing
+   depth follows `missing_depth_policy`. Strict color seeds do not need depth
+   support, so a thin chromatic line or isolated chromatic pixel can survive.
+2. **Growth candidates:** usable, unclipped color with ellipse score
+   `(dC/Tc)^2 + (dL/Tl)^2 > color_relaxation_ratio^2`, plus depth foreground and
+   the same local dZ support used in evidence mode. This deliberately permits
+   colors below the strict threshold or within its uncertainty margin. Growth
+   does not require `strong_depth_ratio`, but does require actual valid depth
+   above `depth_threshold_m`; missing depth is never repaired.
+3. **Bound:** add only candidates reachable from an initial seed in at most
+   `color_growth_max_steps` 8-neighbor steps. Every intermediate pixel must pass
+   the growth gates. The bound does not reset at newly added pixels. Gaps,
+   invalid color/depth and ROI cuts cannot be jumped. At zero steps, return only
+   seeds. A diagonal move counts as one step, so this is not Euclidean distance.
+4. **Provenance:** all added pixels are uncertain, even with good depth support.
+   Apply the existing optional component-area filter afterward. Neither the
+   growth nor its uncertainty implies a verified material edge or safe pick.
+
+| Setting | Default; range | Effect |
+| --- | --- | --- |
+| `color_relaxation_ratio` | .5; finite number in (0,1] | Multiplies both color ellipse radii locally. Smaller values admit weaker color changes, potentially including shadows. It does not lower the seed threshold. |
+| `color_growth_max_steps` | 2; Python int in 0..20 | Maximum geodesic path length from a seed. Larger values recover broader weak-color regions but allow more leakage; 0 disables growth. |
+
+These settings are validated and recorded in all modes but affect only color_seeded.
+The existing three `depth_support_*` settings gate growth only, not seeds. A radius
+of 1 and fraction .25 require two agreeing depth neighbors: weak one-pixel tips
+may still be lost. Work is bounded by image area times the support neighborhood
+plus the number of growth steps. No new dependency is added.
+
+The decision legend is mode-specific in `stages['fusion']['decision_reasons']`:
+1 = strict seed with depth, 3 = strict seed without depth confirmation,
+4 = unselected depth with usable background-color agreement,
+5 = other unresolved color/depth/relaxed-color candidate, 6 = area-filtered,
+7 = accepted bounded growth, 0 = no candidate/unavailable. Code 2 is unused.
+Suppressed and deferred pixels remain uncertain and are excluded from
+`outline_observed_mask`, not silently declared observed background.
+
+With diagnostics enabled, inspect `color_seed_mask`, `relaxed_color_mask`,
+`growth_candidate_mask`, `growth_step` (-1 not reached, 0 seed, 1..N growth),
+`accepted_growth_mask`, depth support, and the decision map. Seed and step maps
+retain **pre-area-filter provenance**; accepted masks, decision codes and
+`metrics['grown_pixels']` describe the final selection. `metrics['seed_pixels']`
+counts initial seeds before area filtering. The dedicated debug panel labels the
+selected mode's decisions. `observed_mask` still records policy-dependent input
+availability, not the physical certainty of a grown pixel.
+
+```python
+seg = RGBDBackgroundSegmenter(
+    fusion_mode='color_seeded', color_relaxation_ratio=.5, color_growth_max_steps=2,
+).detect(current_color, current_depth,
+         background_color=empty_color, background_depth=empty_depth,
+         color_order='RGB', registered_to_depth=True, depth_scale_m=.001,
+         diagnostics=True)
+outline = OuterContourDetector().detect(
+    seg.object_mask, observed_mask=seg.outline_observed_mask)
+# Keep seg.uncertain_mask for downstream segmentation_uncertain_mask checks.
+```
+
+Run `PYTHONPATH=src python examples/example_rgbd_seeded.py` for one minimal API
+example. Evaluation runners, parameter grids, reports and galleries belong in a
+separate local evaluation directory, not this repository.
+
+**Limitations:** No strict chroma seed means no object, even if same-color depth
+is strong. Rejected/missing/clipped color cannot trigger a depth-only fallback.
+Large color holes and distant weak endpoints remain unfilled by design. A real
+hole or adjacent shadow with matching erroneous color and depth can still be
+filled within the bound. Colored shadows and color registration errors can create
+false seeds anywhere; bounding growth does not remove false seeds. Do not claim
+universal contour improvement, topology preservation, or real-image accuracy.
+Compare added and rejected pixels on independently annotated, registered real
+pairs before selecting this mode or changing its parameters.
 
 ## Settings and debug
 
@@ -118,15 +311,18 @@ nothing. Diagonally touching objects still form one component.
 | `background_max_offset` | 40 | Maximum permitted Lab compensation vector norm |
 
 Check/compensation reuse the existing color-reference implementation. A rejected
-check disables color evidence and keeps usable depth. It never falls back to
+check disables color evidence and keeps usable depth in legacy modes; evidence
+mode requires strong, supported depth without color confirmation. Color_seeded
+mode has no seeds and defers depth candidates when color is rejected. It never falls back to
 border colors. Too few check pixels is an input error. These checks concern color
 only; depth reference noise/drift is not compensated or validated by that region.
 
 Result masks include `object_mask`, `uncertain_mask`, `observed_mask`,
 `color_foreground_mask`, `depth_foreground_mask`, `depth_valid_mask`, and
-`conflict_mask`. `observed_mask` describes availability under the fusion policy,
+`conflict_mask`, `suppressed_mask`, and `deferred_mask`. `observed_mask` describes availability under the fusion policy,
 not semantic certainty and not raw current-depth validity alone. Pass it to
-`OuterContourDetector` so unavailable pixels and ROI cuts are reported as such.
+`OuterContourDetector` so unavailable pixels and ROI cuts are reported as such;
+in evidence/color_seeded modes prefer `outline_observed_mask` as described above.
 Do not use `~uncertain_mask` as the outline observation domain by default: that
 would cut out useful color-only objects and create artificial contours. Propagate
 segmentation uncertainty separately when interpreting outlines. For metric outline
@@ -136,7 +332,10 @@ normal contract; do not substitute the pair-validity mask without considering it
 The fusion stage reports `candidate` when selected pixels exist,
 `no_change_candidate` when observations exist but none pass selection,
 `insufficient` when the ROI has no usable observations under the policy, and
-`empty_domain` when the ROI itself is empty.
+`empty_domain` when the ROI itself is empty. In evidence mode, `unresolved` takes
+precedence over `no_change_candidate` when no pixels are selected but suppressed
+or deferred candidates remain (with usable observations). Counts/masks must still
+be checked when status is `candidate`: other regions can remain unresolved.
 
 `diagnostics=True` retains numeric `depth_difference_m`,
 `background_chroma_distance`, `background_luma_distance`,
@@ -165,3 +364,13 @@ rolling shutter and mismatched alignment can create false contours. Nearby or
 touching objects are not split semantically. No learned object recognition,
 subpixel boundary recovery, camera operation, or real-image precision claim is
 provided. Synthetic tests establish only these API/evidence contracts.
+
+## Dark shadows and much nearer objects
+
+For same-table-depth shadows and nearer/invalid-depth occluders, combine the
+existing depth-required mode, a caller-derived depth-band `work_roi`, and explicit
+unknown-depth handling. Optional intersection preserves the color-seeded
+constraint without bypassing the depth gate. See
+[the workflow, diagnostics and tradeoffs](RGBD_SHADOW_OCCLUDERS.md) and
+`examples/example_rgbd_shadow_occluders.py`. This excludes visible near surfaces;
+it does not reconstruct hidden target material or certify physical holes.

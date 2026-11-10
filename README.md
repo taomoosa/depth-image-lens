@@ -394,6 +394,17 @@ shadow rejection. See [input contracts, fusion and limits](RGBD_BACKGROUND.md)
 and `examples/example_rgbd_background.py`. Synthetic coverage does not establish
 real-image contour accuracy.
 
+For color cross-checking of depth candidates, opt into `fusion_mode='evidence'`.
+It records accepted, suppressed and unresolved evidence while retaining strong
+supported same-color depth candidates. See [decision rules and limitations](RGBD_BACKGROUND.md#evidence-fusion)
+and `examples/example_rgbd_fusion.py` for comparisons with the existing modes.
+
+For weak color edges near strict chroma seeds, `fusion_mode='color_seeded'` adds
+bounded, depth-supported color growth without whole-mask smoothing. Every addition
+is uncertain; unseeded same-color objects can be lost. See [bounded growth and its
+limits](RGBD_BACKGROUND.md#bounded-color-growth) and the minimal
+`examples/example_rgbd_seeded.py`. Independent real-image accuracy is unvalidated.
+
 ## Supported overhead pick geometry
 
 `OverheadPickCandidateDetector` uses current/empty depth inside one selected
@@ -412,3 +423,9 @@ current/empty NPZ arrays and JSON settings, and records masks, contour IDs,
 representative points and per-pixel evidence in a new output directory.
 
 - [Outer-edge bulge evidence](EDGE_BULGE.md): compare a raised outer band with the observed inward surface, with diagnostic reference masks.
+
+For very dark table shadows and nearer/invalid-depth occluders, see
+[the existing-API depth-band workflow](RGBD_SHADOW_OCCLUDERS.md) and
+`examples/example_rgbd_shadow_occluders.py`. It preserves unknown occlusions and
+explicitly trades thin/missing-depth recall for stricter depth evidence; library
+defaults are unchanged.

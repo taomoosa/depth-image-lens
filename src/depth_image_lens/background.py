@@ -5,6 +5,8 @@ from .boundary import _background_selection, _components
 from .debug import DebugResultMixin, _opencv
 from .depth import _numeric_image, _validate_depth_scale, _invalid_values
 from .geometry import bool_mask
+from ._rgbd_fusion import (evidence_fusion, color_seeded_fusion, DECISION_REASONS,
+                           SEEDED_DECISION_REASONS)
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,17 @@ class RGBDBackgroundResult(DebugResultMixin):
     metrics: dict
     diagnostics: dict = field(default_factory=dict, repr=False)
     scope: str = 'registered_change_candidates_not_semantic_objects_or_verified_material_edges'
+    suppressed_mask: np.ndarray | None = field(default=None, repr=False)
+    deferred_mask: np.ndarray | None = field(default=None, repr=False)
+
+    @property
+    def outline_observed_mask(self):
+        """Availability excluding unresolved decisions; does not remove all uncertainty."""
+        observed = self.observed_mask.copy()
+        for mask in (self.suppressed_mask, self.deferred_mask):
+            if mask is not None:
+                observed &= ~mask
+        return observed
 
     def to_dict(self):
         return {k: v for k, v in vars(self).items()
@@ -61,7 +74,36 @@ class RGBDBackgroundResult(DebugResultMixin):
         strip = np.zeros((tiles[0].shape[0], base.shape[1], 3), np.uint8)
         for i, tile in enumerate(tiles):
             strip[:, i * width:(i + 1) * width] = tile
-        return np.concatenate((base, strip), axis=0)
+        output = np.concatenate((base, strip), axis=0)
+        if 'fusion_decision' in self.diagnostics:
+            # A dedicated view avoids losing decision evidence to the common
+            # renderer's bounded number of mask thumbnails.
+            palette = np.array([(35,35,35), (30,210,90), (50,160,245),
+                                (50,220,220), (235,75,90), (180,100,220),
+                                (240,150,40), (245,210,65)], dtype=np.uint8)
+            tile = palette[self.diagnostics['fusion_decision']]
+            if color_order == 'BGR':
+                tile = tile[..., ::-1].copy()
+            height = min(480, max(2, round(tile.shape[0] * width / tile.shape[1])))
+            panel = np.zeros((max(height + 30, 212), base.shape[1], 3), np.uint8)
+            panel[30:height + 30, :width] = cv.resize(tile, (width, height), interpolation=cv.INTER_NEAREST)
+            cv.putText(panel, 'Fusion decision (not probability)', (4,20), cv.FONT_HERSHEY_SIMPLEX,.4,(255,255,255),1)
+            labels = ['0: no selected change / unavailable', '1: depth + reliable color',
+                      '2: strong supported depth only', '3: chroma only (uncertain)',
+                      '4: depth suppressed (unresolved)', '5: deferred (unresolved)',
+                      '6: area filtered']
+            if self.parameters['fusion_mode'] == 'color_seeded':
+                labels = ['0: no selected change / unavailable', '1: strict seed + depth',
+                          '2: unused in this mode', '3: strict seed (color only)',
+                          '4: depth suppressed (unresolved)', '5: deferred (unresolved)',
+                          '6: area filtered', '7: bounded growth (uncertain)']
+            for i, label in enumerate(labels):
+                ink = palette[i] if color_order == 'RGB' else palette[i, ::-1]
+                if i == 0:
+                    ink = (210, 210, 210)
+                cv.putText(panel, label, (width + 8, 24 + 22*i), cv.FONT_HERSHEY_SIMPLEX,.4,tuple(map(int,ink)),1)
+            output = np.concatenate((output, panel), axis=0)
+        return output
 
 
 class RGBDBackgroundSegmenter:
@@ -69,14 +111,22 @@ class RGBDBackgroundSegmenter:
 
     Color uses the boundary detector's encoded-Lab ellipse and optional declared
     background check/offset compensation. Depth is signed empty-current camera Z.
-    Inputs are never modified. No registration, hole filling or smoothing occurs.
+    Inputs are never modified. No registration or depth filling occurs.
+    Optional color_seeded mode adds bounded, evidence-gated mask growth.
     """
     def __init__(self, *, background_chroma_tolerance=20., background_luma_tolerance=60.,
                  background_score_margin=.2, depth_threshold_m=.005, depth_margin_m=.001,
                  fusion_mode='union', missing_depth_policy='color', min_object_area=1,
-                 background_compensate=False, background_check_p95=20., background_max_offset=40.):
-        if fusion_mode not in ('union', 'depth_required'):
-            raise ValueError('fusion_mode must be union or depth_required')
+                 background_compensate=False, background_check_p95=20., background_max_offset=40.,
+                 strong_depth_ratio=3., depth_support_radius_px=1,
+                 depth_support_fraction=.25, depth_support_tolerance_m=.003,
+                 color_relaxation_ratio=.5, color_growth_max_steps=2):
+        if fusion_mode not in ('union', 'depth_required', 'evidence', 'color_seeded'):
+            raise ValueError('fusion_mode must be union, depth_required, evidence or color_seeded')
+        if type(color_growth_max_steps) is not int or not 0 <= color_growth_max_steps <= 20:
+            raise ValueError('color_growth_max_steps must be an integer in 0..20')
+        if type(depth_support_radius_px) is not int or not 1 <= depth_support_radius_px <= 5:
+            raise ValueError('depth_support_radius_px must be an integer in 1..5')
         if missing_depth_policy not in ('color', 'unknown'):
             raise ValueError('missing_depth_policy must be color or unknown')
         if type(min_object_area) is not int or min_object_area < 1:
@@ -87,7 +137,10 @@ class RGBDBackgroundSegmenter:
                        background_luma_tolerance=background_luma_tolerance,
                        background_score_margin=background_score_margin,
                        depth_threshold_m=depth_threshold_m, depth_margin_m=depth_margin_m,
-                       background_check_p95=background_check_p95, background_max_offset=background_max_offset)
+                       background_check_p95=background_check_p95, background_max_offset=background_max_offset,
+                       strong_depth_ratio=strong_depth_ratio, depth_support_fraction=depth_support_fraction,
+                       depth_support_tolerance_m=depth_support_tolerance_m,
+                       color_relaxation_ratio=color_relaxation_ratio)
         for key, value in numeric.items():
             if isinstance(value, (bool, np.bool_)) or not np.isscalar(value):
                 raise ValueError(f'{key} must be a finite number')
@@ -105,8 +158,16 @@ class RGBDBackgroundSegmenter:
             raise ValueError('background_score_margin must be in [0,1]')
         if numeric['depth_margin_m'] >= numeric['depth_threshold_m']:
             raise ValueError('depth_margin_m must be less than depth_threshold_m')
+        if numeric['strong_depth_ratio'] < 1:
+            raise ValueError('strong_depth_ratio must be >= 1')
+        if not 0 < numeric['depth_support_fraction'] <= 1:
+            raise ValueError('depth_support_fraction must be in (0,1]')
+        if not 0 < numeric['color_relaxation_ratio'] <= 1:
+            raise ValueError('color_relaxation_ratio must be in (0,1]')
         self.parameters = dict(numeric, fusion_mode=fusion_mode, missing_depth_policy=missing_depth_policy,
-                               min_object_area=min_object_area, background_compensate=background_compensate)
+                               min_object_area=min_object_area, background_compensate=background_compensate,
+                               depth_support_radius_px=depth_support_radius_px,
+                               color_growth_max_steps=color_growth_max_steps)
 
     def detect(self, color, depth, *, background_color, background_depth,
                color_order, registered_to_depth=False, depth_scale_m,
@@ -175,9 +236,11 @@ class RGBDBackgroundSegmenter:
             color_fg[:] = False
             color_uncertain[:] = True
             color_info.pop('fallback', None)
-            color_info['selection_action'] = 'disable_color_evidence_keep_depth'
+            color_info['selection_action'] = ('disable_color_require_strong_supported_depth'
+                if p['fusion_mode'] == 'evidence' else 'disable_color_no_seeds'
+                if p['fusion_mode'] == 'color_seeded' else 'disable_color_evidence_keep_depth')
         color_info['difference_model']['applied_to_selection'] = bool(
-            p['fusion_mode'] == 'union' and color_usable.any())
+            p['fusion_mode'] != 'depth_required' and color_usable.any())
         color_fg &= color_usable
         t = p['depth_threshold_m']
         depth_fg = valid & (delta > t)
@@ -199,6 +262,19 @@ class RGBDBackgroundSegmenter:
         # farther changes, absent modalities and threshold margins remain visible.
         uncertain = roi & (~valid | ~color_usable | color_uncertain | near_threshold |
                            farther | (color_fg & ~depth_fg))
+        suppressed = np.zeros(shape, bool)
+        deferred = np.zeros(shape, bool)
+        fusion_debug = {}
+        if p['fusion_mode'] == 'evidence':
+            obj, suppressed, deferred, fusion_debug = evidence_fusion(
+                delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
+                color_debug['background_chroma_distance'], valid, p)
+            uncertain |= suppressed | deferred | fusion_debug['accepted_depth_only_mask']
+        elif p['fusion_mode'] == 'color_seeded':
+            obj, suppressed, deferred, fusion_debug = color_seeded_fusion(
+                delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
+                color_debug, valid, p)
+            uncertain |= suppressed | deferred | fusion_debug['accepted_growth_mask']
         filtered = np.zeros(shape, bool)
         if p['min_object_area'] > 1:
             labels, parts = _components(obj)
@@ -209,11 +285,21 @@ class RGBDBackgroundSegmenter:
             filtered = remove[labels]
             obj &= ~filtered
             uncertain |= filtered
+            if fusion_debug:
+                fusion_debug['fusion_decision'][filtered] = 6
+                for key in ('accepted_both_mask', 'accepted_depth_only_mask', 'accepted_color_only_mask',
+                            'accepted_growth_mask'):
+                    if key in fusion_debug:
+                        fusion_debug[key] &= ~filtered
         status = ('empty_domain' if not roi.any() else 'insufficient' if not observed.any()
-                  else 'candidate' if obj.any() else 'no_change_candidate')
+                  else 'candidate' if obj.any() else 'unresolved' if (suppressed | deferred).any()
+                  else 'no_change_candidate')
         stages = dict(color_reference=color_info,
                       fusion=dict(status=status,
-                                  rule='depth_foreground OR (color_foreground AND NOT farther)' if p['fusion_mode'] == 'union' else 'depth_foreground_only',
+                                  rule={'union': 'depth_foreground OR (color_foreground AND NOT farther)',
+                                        'depth_required': 'depth_foreground_only',
+                                        'evidence': 'color_confirmation_or_strong_supported_depth_or_chroma_candidate',
+                                        'color_seeded': 'strict_chroma_seeds_plus_bounded_relaxed_color_supported_depth_growth'}[p['fusion_mode']],
                                   warnings=['alignment_and_empty_reference_are_caller_assumptions',
                                             'color_only_change_can_be_shadow_or_thin_object',
                                             'no_change_does_not_prove_no_object',
@@ -223,10 +309,27 @@ class RGBDBackgroundSegmenter:
                        observed_pixels=int(observed.sum()), color_foreground_pixels=int(color_fg.sum()),
                        depth_foreground_pixels=int(depth_fg.sum()), conflict_pixels=int(conflict.sum()),
                        filtered_pixels=int(filtered.sum()))
+        if p['fusion_mode'] in ('evidence', 'color_seeded'):
+            reasons = SEEDED_DECISION_REASONS if p['fusion_mode'] == 'color_seeded' else DECISION_REASONS
+            stages['fusion']['decision_reasons'] = {str(code): reason for code, reason in reasons.items()}
+            stages['fusion']['warnings'] += ['spatial_support_is_not_temporal_stability_or_probability',
+                                             'suppressed_and_deferred_pixels_are_not_confirmed_background']
+            metrics.update(suppressed_pixels=int(suppressed.sum()), deferred_pixels=int(deferred.sum()),
+                           decision_counts={reason: int((fusion_debug['fusion_decision'] == code).sum())
+                                            for code, reason in reasons.items()})
+        if p['fusion_mode'] == 'color_seeded':
+            stages['fusion']['warnings'] += [
+                'chroma_seeds_required_same_color_and_luma_only_objects_can_be_lost',
+                'growth_is_uncertain_inference_not_observed_material',
+                'adjacent_shadow_with_depth_error_can_grow_within_step_limit',
+                'color_misalignment_and_colored_shadows_can_seed_false_objects']
+            metrics.update(seed_pixels=int(fusion_debug['color_seed_mask'].sum()),
+                           grown_pixels=int(fusion_debug['accepted_growth_mask'].sum()))
         debug = {}
         if diagnostics:
-            debug = dict(color_debug, depth_difference_m=delta, color_usable_mask=color_usable,
+            debug = dict(color_debug, **fusion_debug, depth_difference_m=delta, color_usable_mask=color_usable,
                          farther_mask=farther, depth_threshold_margin_mask=near_threshold,
                          color_only_mask=color_fg & ~depth_fg, filtered_mask=filtered, work_roi=roi)
         return RGBDBackgroundResult(obj, uncertain, observed, color_fg, depth_fg, valid, conflict,
-                                    p.copy(), stages, metrics, debug)
+                                    p.copy(), stages, metrics, debug,
+                                    suppressed_mask=suppressed, deferred_mask=deferred)

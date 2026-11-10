@@ -197,6 +197,27 @@ class OuterContourResult(DebugResultMixin):
             raise ValueError('sequence omits a segment or corner record')
         return resolved
 
+    def corner_interior_points(self, offset_px, contour_id=None):
+        """Return detached inward-offset records without changing corner['xy'].
+
+        None selects the largest polygon-area contour, as in resolve_sequence.
+        Each row identifies its contour/corner and contains source_xy, floating
+        xy, nearest sample_xy, inward_unit_xy, offset_px, status and reason.
+        Offset is nonnegative Euclidean displacement in processing pixels along
+        the inward bisector of raw arclength chords at corner_window_px, not
+        clearance from both edges or a metric/3D distance. Coordinates are XY.
+
+        Positive offsets must stay strictly inside this visible component's raw
+        pixel-center polygons, without touching/crossing another boundary or
+        hole. Uncertain corners/support and impossible offsets return
+        status='unavailable', xy=None and sample_xy=None; no clamping or search
+        for a different point occurs. Zero returns the original observed point.
+        sample_xy rounds by floor(xy + .5); it can still be a boundary pixel for
+        small offsets. Empty results/corner lists return []. See OUTLINE.md.
+        """
+        from ._outline_interior import corner_interior_points
+        return corner_interior_points(self, offset_px, contour_id)
+
     def query_edge_length(self,target_length,*,unit='px',tolerance=None,mode='match',
                           min_support_px=20.,max_line_error_px=None,max_metric_line_error_m=.005,require_corner_endpoints=False):
         """Find visible straight interval candidates, never a particular material edge.

@@ -78,7 +78,7 @@ def main():
         color_order=order, depth_scale_m=scale, registered_to_depth=True,
         invalid_values=data.get('invalid_values', ()), diagnostics=True,
         **{key: data[key] for key in MASK_KEYS if key in data})
-    outline = OuterContourDetector().detect(seg.object_mask, observed_mask=seg.observed_mask)
+    outline = OuterContourDetector().detect(seg.object_mask, observed_mask=seg.outline_observed_mask)
     pick = picker.detect(data['depth'], outline, contour_id=args.contour_id,
         background_depth=data['background_depth'], depth_scale_m=scale, registered_to_mask=True,
         depth_valid_mask=seg.depth_valid_mask, segmentation_uncertain_mask=seg.uncertain_mask,
@@ -107,6 +107,7 @@ def main():
                    segmentation_metrics=seg.metrics, pick_metrics=pick.metrics)
     write_json('summary.json', summary)
     arrays = {}
+    arrays['seg_outline_observed_mask'] = seg.outline_observed_mask
     for name, result in [('seg', seg), ('pick', pick)]:
         arrays.update({name+'_'+key: value for key, value in vars(result).items() if isinstance(value, np.ndarray)})
         arrays.update({name+'_diag_'+key: value for key, value in result.diagnostics.items() if isinstance(value, np.ndarray)})

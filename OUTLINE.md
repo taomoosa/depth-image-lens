@@ -175,6 +175,88 @@ The helpers do not change query_edge_length's scope: that query still searches a
 contours. To associate its intervals with a selected contour, filter the query records
 by contour_id. Neither helper changes detection, debug rendering, thresholds or IDs.
 
+## Separate inward-offset corner positions
+
+`result.corner_interior_points(offset_px, contour_id=None)` computes separate
+positions without modifying `corner['xy']`, contour geometry, IDs or `to_dict()`.
+Omit the contour ID to select the largest polygon-area contour, using the same
+policy as `resolve_sequence()`. To process every component, call it once for each
+`result.contours` ID. The returned list follows that contour's stored corner order;
+it has one row for each corner, including failures. Hole boundaries are not corners
+of the exterior and are never added to the list.
+
+```python
+largest = result.largest_contour()
+if largest is not None:
+    offsets = {row['corner_id']: row for row in
+               result.corner_interior_points(10.0, largest['id'])}
+    for entry in result.resolve_sequence(largest['id']):
+        if entry['type'] != 'corner':
+            continue
+        record = entry['record']
+        inward = offsets[record['id']]
+        if inward['status'] == 'computed':
+            print('raw:', record['xy'], 'inward:', inward['xy'])
+            x, y = inward['sample_xy']
+            # If sampling an aligned image: value = image[y, x]
+        else:
+            print(record['id'], inward['reason'])
+```
+
+The offset is a **Euclidean displacement from the raw corner in processing-image
+pixels**, along the inward angle bisector. Incoming and outgoing unit directions
+come from raw cyclic arclength chords at the detector's `corner_window_px` on
+either side of that raw point. Their inward normals are added and normalized.
+Clockwise image-coordinate orientation determines the interior for both convex
+and concave turns; this is not a direction toward the component's centroid. Raw
+chords can differ slightly from the smoothed tangent evidence used to detect the
+corner, particularly on raster staircases and at closely spaced bends.
+
+At an axis-aligned right-angle corner, a 10px displacement moves approximately
+7.071px along each axis. It does **not** mean a 10px perpendicular clearance from
+each edge, a metric/3D distance, or a guarantee of usable depth or safe grasping.
+Scale pixel distances when resizing the image; depth/intrinsics do not affect this
+query. For a physical offset, calibrated surface geometry is required separately.
+
+Each detached, strict-JSON-compatible row contains:
+
+- `contour_id`, `corner_id`: existing IDs, not list indices.
+- `source_xy`: original raw corner coordinates, copied.
+- `xy`: floating-point derived XY with the requested displacement, or `None`.
+- `sample_xy`: nearest integer pixel XY using `floor(xy + 0.5)`, or `None`.
+  Arrays index `[y, x]`. Rounding changes the displacement; a small positive offset
+  can still sample the original boundary pixel. Use `xy` for the unrounded position.
+- `inward_unit_xy`: unit direction when supported, even if the requested position
+  is unavailable; otherwise `None`.
+- `offset_px`, `status` (`computed` or `unavailable`), and `reason` (`None` on success).
+
+Positive offsets require the endpoint to be strictly inside the raw pixel-center
+outer polygon and outside its hole polygons. Its nearest pixel must belong to the
+same observed connected component. The straight path from the source must not
+touch or cross any other boundary, including holes, notches and unobserved gaps.
+Thus an endpoint on foreground beyond a hole is still rejected. These conservative
+pixel-center polygon checks can reject points near a boundary that a filled-pixel
+cell model would accept; roundoff proximity to a boundary is also rejected. No
+shorter offset, clipped coordinate or alternative direction is silently substituted.
+
+Failure reasons are `corner_not_observed`, `unobserved_corner_support`,
+`ambiguous_or_insufficient_contour`, `degenerate_corner_direction`,
+`offset_point_not_inside_component` and `offset_path_touches_boundary`. Clipped
+corners, unreliable chord support and self-touching components stay unavailable.
+Other fully supported corners on a partially clipped component can still succeed.
+Narrow regions or large offsets may not have room for the requested point. A zero
+offset returns the original point (not a strict interior point), subject to the
+same contour, visibility and direction-support checks.
+
+Offsets must be finite nonnegative real scalars; booleans are rejected. Invalid
+offsets/IDs and duplicate record IDs raise `ValueError`. Empty results or contours
+without detected corners return `[]`. Like the other result helpers, this expects
+unmodified detection geometry and masks. Diagnostics are not required, inputs and
+result records are not mutated, and the helper writes no files.
+
+Run `python examples/example_outline_interior.py --offset-px 10` for a synthetic
+L-shaped example with both convex and concave corners and separate raw/inward XY.
+
 ## Optional 3D lengths
 
 ```python

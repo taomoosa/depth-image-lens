@@ -6,6 +6,12 @@
 ここで扱うのは、入力からマスク・幾何候補を得るための設定です。
 画素余裕はグリッパー寸法ではなく、布の物性・指先の進入・把持成功は判定しません。
 
+## 撮影ごとに設定し直す前に
+
+距離・姿勢・照明・厚みの変動によって、全撮影に共通する深度帯や色閾値が存在しない
+場合があります。80 mmの上限や2画素の成長は実機の推奨値ではありません。
+[固定設定の成立条件と合成反例](RGBD_CAPTURE_STABILITY.md)を先に確認してください。
+
 ## まず動かす
 
 OpenCVを含む環境で、リポジトリのルートから実行します。
@@ -118,20 +124,24 @@ int欄はPythonのint（bool不可）、bool欄はTrue/Falseです。許容範�
 | --- | --- | --- | --- |
 | `background_chroma_tolerance` | 20.0 | float、OpenCV 8-bit Lab色差、>0 | 上げると色味差に鈍感、下げると微妙な色差と色ノイズを拾う。lumaと楕円判定を構成 |
 | `background_luma_tolerance` | 60.0 | float、encoded Lab明るさ差、>0 | 上げると影・明るさ変化を拾いにくいが明度だけ違う物体も欠ける。色味の差はchromaで調整 |
-| `background_score_margin` | 0.2 | float、楕円半径の無次元幅、0..1 | 上げると半径1付近のuncertainが広がる。前景判定は変えないが、uncertainを渡すpickの候補は減り得る |
+| `background_score_margin` | 0.2 | float、楕円半径の無次元幅、0..1 | 上げると半径1付近のuncertainが広がる。単独の色前景判定は不変。evidenceでは色による確認／抑制とchromaのみ採用にも作用し、最終選択を変える |
 | `depth_threshold_m` | 0.005 | float、m、>0 | 上げると小さいdepth差を除外、下げると薄い物体とノイズを拾う。正負両方に使用し、遠方変化は色候補を抑止 |
 | `depth_margin_m` | 0.001 | float、m、0以上かつdepth_threshold_m未満 | ±閾値付近のuncertain幅。上げてもdepth前景そのものは変わらないが後段pickへの除外は増え得る |
-| `fusion_mode` | 'union' | str、'union' / 'depth_required' | unionは色またはdepthの候補。depth_requiredはdepthだけを選択し、影を抑える代わりに薄い／欠損depth物体を失う |
-| `missing_depth_policy` | 'color' | str、'color' / 'unknown' | union時、colorは欠損depthでも色候補をuncertain付きで残す。unknownは除外して未観測扱い。depth_requiredではどちらもdepth必須 |
+| `fusion_mode` | 'union' | str、'union' / 'depth_required' / 'evidence' / 'color_seeded' | unionは色またはdepthの候補。depth_requiredはdepthのみ。evidenceは色確認と深度の強さ・局所支持を照合。color_seededは厳格な色seedから局所的に成長。後述の手順参照 |
+| `missing_depth_policy` | 'color' | str、'color' / 'unknown' | union/evidence/color_seeded時、colorは欠損depthでも各方式の色候補をuncertain付きで残す。unknownは除外して未観測扱い。depth_requiredではどちらもdepth必須 |
 | `min_object_area` | 1 | int、8近傍成分の画素数、1以上 | 上げると小成分を除去してuncertainにする。細片も失う。穴埋めや接触成分の分離にはならない |
 | `background_compensate` | False | bool | Trueはcheck領域のLab差medianで全体offset補正。25画素以上の有効check領域が必要。局所的影・位置ずれは補正しない |
 | `background_check_p95` | 20.0 | float、重みなしencoded Lab距離、>0 | check領域の補正後p95の上限。下げると色参照を棄却しやすい。上げる前にROI・照明・登録を確認。check未指定なら作用しない |
 | `background_max_offset` | 40.0 | float、Lab offsetベクトルのノルム、>0 | 補正時のoffset上限。上げると大きな補正を許すが参照不適合を通しやすい。compensate=Falseでは作用しない |
+| `strong_depth_ratio` | 3.0 | float、無次元、1以上 | evidence専用。強いdepth差の基準はdepth_threshold_m×倍率（既定15 mm）。上げるとdepthのみ採用が厳しくなる。下げると浅い同色物体とdepth誤差を通す |
+| `depth_support_radius_px` | 1 | int、処理画素、1..5 | evidenceおよびcolor_seededの追加画素用。近傍一辺2r+1。上げると広い範囲を見るが細形状を失いやすい。分母も変わるため効果は単調ではない |
+| `depth_support_fraction` | 0.25 | float、割合、0より大きく1以下 | evidenceのdepthのみ採用／color_seededの追加画素用。上げるほど必要な近傍支持が増える。下げると細い部分を残すが孤立ノイズへの抵抗が弱まる |
+| `depth_support_tolerance_m` | 0.003 | float、m、0以上 | evidenceおよびcolor_seededの追加画素用。近傍と中心の背景depth差dZの一致幅。上げると傾斜やノイズを許す。0は浮動小数点の完全一致 |
 
 色の判定は `score=(dC/Tc)^2+(dL/Tl)^2 > 1`、不確実性marginはscoreそのものではなく
 `sqrt(score)` の1からの距離に適用されます。これは確率・標準化されたDelta Eではありません。
 深度差 `dZ=empty-current` が `T` より大きいと前景、`-T` より小さいと遠方変化です。
-等号では前景にしません。色check棄却時も使えるdepthは継続し、border色の推測へ切り替えません。
+等号では前景にしません。色check棄却時もdepth評価は継続します。evidenceでは強く局所支持されたdepthだけを採用し、それ以外のdepth候補は保留します。border色の推測へ切り替えません。
 
 ## OverheadPickCandidateDetector: 全constructor設定
 
@@ -188,7 +198,7 @@ pickには `seg.depth_valid_mask`（同じ両depthのpair有効性を含む）�
 seg = segmenter.detect(color, depth, background_color=empty_color,
     background_depth=empty_depth, color_order='RGB', depth_scale_m=.001,
     registered_to_depth=True, diagnostics=True)
-outline = OuterContourDetector().detect(seg.object_mask, observed_mask=seg.observed_mask)
+outline = OuterContourDetector().detect(seg.object_mask, observed_mask=seg.outline_observed_mask)
 pick = picker.detect(depth, outline, background_depth=empty_depth,
     depth_scale_m=.001, registered_to_mask=True,
     depth_valid_mask=seg.depth_valid_mask,
@@ -271,12 +281,89 @@ with np.load('debug-output/run-01/arrays.npz', allow_pickle=False) as a:
 | 状態 | 次に確認すること |
 | --- | --- |
 | seg `candidate` | maskとuncertainが目的に合うか。前景があっても確定物体とは限らない |
+| seg `unresolved` | evidenceで採用なし、抑制／保留候補あり。入力が背景と確定した意味ではない |
 | seg `no_change_candidate` | 入力の対応・同一参照汚染・閾値。物体不在の証明ではない |
 | seg `insufficient` / `empty_domain` | 有効maskとfusion policy／空work_roi |
 | pick `no_object` | 前段mask、observed、選択contour |
 | pick `unknown` | trustedな内部が残るか、欠損や局所不一致があるか。reasonsとunknown_maskを読む |
 | pick `no_candidate` | 評価できたが高さ・面積・幅を満たさなかった。rejected_regionsを読む |
 | pick `candidate` | 代表点の支持率・余裕・選択成分を確認。別領域にunknownが残ることもある |
+
+## 色とdepthを照合するevidenceモード
+
+`RGBDBackgroundSegmenter(fusion_mode='evidence')` で有効化します。
+従来のunionはdepth候補を色の背景一致で抑制しません。evidenceはdepthの強度と
+近傍支持も見て、色による確認がない弱い／局所的に不整合なdepth候補を減らします。
+これは固定幅の輪郭侵食ではなく、単一ペアの根拠による選別です。真の物体が欠ける
+場合もあります。値は正答確率ではなく、時間的安定性も保証しません。
+[詳細な全ルールと理由コード](RGBD_BACKGROUND.md#evidence-fusion)も参照してください。
+
+基本の分岐は次のとおりです。
+
+- depth前景＋色の確認：採用。色がclipped・閾値margin内・無効・参照棄却なら確認に使いません。
+- 色の確認なし＋強いdepth＋局所支持：同色物体を含め採用しますがuncertainを付けます。
+- depth前景のみで、強度または局所支持が不足し、色は背景と一致：抑制して`suppressed_mask`へ。
+- depth前景なし＋十分なchroma差：薄物体候補としてuncertain付き採用。欠損policy・遠方vetoを適用。
+- それ以外の候補：`deferred_mask`へ保留。明るさ差だけの影／物体や弱depth＋不明な色など。
+
+色の「背景一致」は物体不存在の証明ではありません。抑制／保留もuncertainに含めます。
+既定の局所支持は中心を除く3×3の8位置のうち2位置以上。位置ごとに、depth前景かつ
+中心とのdZ差が3 mm以下であることが必要です。欠損・背景・ROI外・画像外も分母に
+入り、支持には入りません。矩形角は3/8で残りますが、同色1画素線の端は1/8で落ちます。
+色で確認できる細い部分はこの局所支持条件を要求しません。
+
+調整は以下の順で行います。
+
+1. 単位・登録・空参照を確認し、既存のdepth閾値とchroma/luma許容値を決めます。
+   合わせ込みで画像ずれを隠さないでください。色参照checkの棄却時は色による抑制も停止します。
+2. 同じ入力でunionとevidenceを比較。まず`suppressed_mask`／`deferred_mask`と理由パネルを見ます。
+   全候補が消え、未解決画素が残ればfusion statusは`unresolved`です。`candidate`でも未解決領域は残り得ます。
+3. 同色物体が弱depthとして消えるなら`strong_depth_ratio`を下げるか、unionに戻して
+   不確かな形状として扱います。単に色一致を背景確定としないでください。
+4. 同色の細部が欠けるなら支持率配列を確認し、`depth_support_fraction`を下げる／
+   半径を小さくします。孤立点は正しい点かノイズかを判別できません。
+5. 不整合なdepthだけの候補が残るなら支持率を上げる／一致幅を下げる方向を試します。
+   強い一様な参照誤差はこれでも通ります。独立した撮り直し・参照確認が必要です。
+
+| 症状 | 確認と扱い |
+| --- | --- |
+| 色が背景一致で弱depth候補が消えた | 意図した抑制か真の浅い同色物体の損失かを実画像で確認。suppressedは背景確定ではない |
+| 強い同色形状は残るがpickがunknown | 採用depth-onlyはuncertainなのでpickのtrusted領域から除外される。uncertainを無条件に消して候補を強制しない |
+| 明度だけ違う薄物体が消える | 影と区別できずdeferredになる。必要ならunionで候補を残し、別の根拠で判定する |
+| 影＋弱depth誤差が通る | 両方で支持されると理由1になる。luma許容値・参照・登録を確認。単一ペアでは区別不能な反例がある |
+| 色ノイズや位置ずれの細い帯が残る | chroma-onlyもuncertain候補。背景checkや色許容を確認し、登録を修正。chromaを絶対視しない |
+| clipped色／欠損が多い | 確認・背景一致に使えずdeferredが増える。入力改善を優先。強い支持depthはuncertainのまま採用可能 |
+
+outlineには`seg.object_mask`と`seg.outline_observed_mask`を渡します。後者は
+`seg.observed_mask & ~seg.suppressed_mask & ~seg.deferred_mask`です。
+観測はあるが採否未解決の部分を、確定背景としてcorners/segmentsに使わないためです。
+未解決画素に隣接する切れ目は不確かと扱われ、成分が分かれる場合があります。
+**全uncertainを除いたり、object_maskを一律に侵食したりしません**。
+採用された色のみ／同色depthのみ形状はoutlineに残り、物理輪郭の保証はありません。
+従来モードでは新しい2マスクは全Falseなので、propertyは元のobserved_maskと同じです。
+
+pickへは従来どおり`segmentation_uncertain_mask=seg.uncertain_mask`を渡します。
+outlineの2D形状取得と、pickで信用して使える深度領域は分けて考えてください。
+
+debugは`diagnostics=True`と`seg.save_debug('fusion.png', color)`を使用します。
+新しい専用パネルは緑=両方、青=強い支持depthのみ、水色=chromaのみ、赤=抑制、
+紫=保留、橙=面積filterです。数値コードは`diagnostics['fusion_decision']`、
+凡例は`stages['fusion']['decision_reasons']`にあります。
+`depth_support_fraction`配列、`strong_depth_mask`、`locally_supported_depth_mask`、
+`reliable_color_foreground_mask`／`reliable_color_background_mask`で分岐の根拠を確認します。
+`accepted_both_mask`／`accepted_depth_only_mask`／`accepted_color_only_mask`は最終面積filter後の採用です。
+色のraw scoreが大きくても、clippedや参照棄却なら確認には使いません。
+
+次のexampleは11合成ケースで旧2方式と比較し、失敗例も出力します。
+
+```bash
+python examples/example_rgbd_fusion.py --output-dir debug-output/fusion-01
+```
+
+実入力は既存tuning exampleのconfigに`{"segmenter":{"fusion_mode":"evidence"}}`を指定します。
+上記の新パラメータも同じJSONに追加できます。`pixel.json`と`arrays.npz`に理由・支持率が含まれ、
+`seg_outline_observed_mask`も保存されます。新モードの検証は合成の動作比較であり、
+独立した空背景実ペアの精度測定ではありません。
 
 ## 確認されている範囲
 
@@ -285,3 +372,38 @@ with np.load('debug-output/run-01/arrays.npz', allow_pickle=False) as a:
 真上で独立撮影した対応空背景ペアと、実把持成功の検証は未完了です。
 広く浮いた平面も候補となり、薄いしわ・急傾斜は支持や幅条件で除外され得ます。
 グリッパー形状・接触・物性を入力していないため、保証付きの摘み設定値はありません。
+
+
+## 色seedから境界だけを補うcolor_seededモード
+
+`fusion_mode='color_seeded'` は、影を避けた厳格な色抽出で輪郭が欠ける場合の
+別案です。既定のunionや既存evidenceの挙動は変えません。
+
+- `dC/Tc > 1 + background_score_margin` のchroma差がある画素をseedにします。
+  明るさだけの差はseedになりません。細線・小物体もこの条件を満たせば残します。
+- seedから8近傍で最大`color_growth_max_steps=2`画素まで、
+  寛容な色閾値と局所支持depthを両方満たす画素だけ追加します。
+  `color_relaxation_ratio=.5`は色楕円の半径倍率です。小さくするほど色差に寛容になります。
+  新しい画素から上限がリセットされることはありません。
+- 追加画素はすべてuncertainです。depth欠測は埋めず、遠方depth・ROI外・無効色は通りません。
+  深度が支持しない本物の穴を「囲まれているから」と埋めることもしません。
+- 同色物体などseedがない対象は消えます。大きな色欠損、離れた弱い端点も残ります。
+  隣接する影とdepth誤差が重なると上限内で誤追加し、本物の穴も両信号が誤れば埋まります。
+  色ずれ・有色の影が誤seedになれば、成長制限だけでは除けません。
+
+調整は最初に`color_growth_max_steps=0`でseedを確認し、1〜2へ増やして
+`accepted_growth_mask`と元画像を比較します。ratioを下げる前に、ずれ・depth欠測・
+深度差の支持を調べてください。全画像の平滑化や無条件の穴埋めより制限された処理ですが、
+細部を常に保つ保証はありません。独立した実画像の輪郭正解での精度は未検証です。
+
+`diagnostics['growth_step']`は-1が未到達、0がseed、1..Nが追加までの段数です。
+seed/stepは面積除去前、`accepted_growth_mask`は面積除去後の記録です。
+`seg.outline_observed_mask`で輪郭を抽出し、pickには`seg.uncertain_mask`を別に渡します。
+追加箇所のuncertainを消して把持候補を強制しないでください。
+
+設定範囲: `color_relaxation_ratio`は有限数(0,1]、`color_growth_max_steps`はPython intの0..20。
+3つの`depth_support_*`は追加候補に適用し、seed自体は削りません。
+`strong_depth_ratio`はこのモードでは使いません。
+詳しい理由コードと診断契約は[API説明](RGBD_BACKGROUND.md#bounded-color-growth)を参照。
+最小例は`PYTHONPATH=src python examples/example_rgbd_seeded.py`です。
+既存NPZ入力例もconfigのsegmenterに同設定を指定できます。

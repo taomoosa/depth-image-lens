@@ -3,3 +3,5 @@ recursive-include examples *.py *.json
 recursive-include tests *.py
 include OUTLINE_MATCH.md
 include CORNER_OUTLINE_MATCH.md
+include RGBD_SHADOW_OCCLUDERS.md
+include RGBD_CAPTURE_STABILITY.md
