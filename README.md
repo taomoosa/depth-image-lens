@@ -144,6 +144,7 @@ Use the guide for the evidence available in your application:
 | Ordered exterior contours and length queries | [Outlines](OUTLINE.md) | `examples/example_outline.py` |
 | Open-reference to partial-exterior matching | [Outline matching](OUTLINE_MATCH.md), [corner-based matching](CORNER_OUTLINE_MATCH.md) | `examples/example_outline_match_sources.py` |
 | Current/empty RGB-D foreground masks | [Background segmentation](RGBD_BACKGROUND.md) | `examples/example_rgbd_background.py` |
+| Visible distinct-color deformable-object counts, from RGB-D or an existing mask | [Object counting](OBJECT_COUNT.md) | `examples/example_object_count.py`, `examples/example_object_count_mask.py` |
 | Optional small-hole filling and mask exterior smoothing | [Mask cleanup](MASK_CLEANUP.md) | `examples/example_mask_cleanup.py` |
 | Supported overhead pick geometry | [Pick candidates](PICK_CANDIDATES.md) | `examples/example_pick_candidate.py` |
 | Raised outer-edge bands | [Edge bulge evidence](EDGE_BULGE.md) | `examples/example_edge_bulge.py` |

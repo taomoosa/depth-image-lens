@@ -278,3 +278,34 @@ small-hole fills and exterior-smoothing changes separately. Unknown and protecte
 regions remain unchanged. Corrections are inferred geometry, not new sensor
 evidence. See [mask cleanup](MASK_CLEANUP.md) for input contracts, topology guards,
 uncertainty handling, failure cases, and RGB-D/outline integration.
+
+
+## Overhead visible-object counting
+
+`OverheadObjectCounter` and `ObjectCountResult` provide visible, distinguishable
+color-group hypotheses from registered current/empty color and depth. See
+[OBJECT_COUNT.md](OBJECT_COUNT.md) for the full API, parameters and counterexamples,
+and `examples/example_object_count.py` for a self-contained example.
+
+`detect(color, depth, *, background_color, background_depth, color_order,
+depth_scale_m, registered_to_depth=False, ...)` requires explicit RGB/BGR,
+metres/count, and `registered_to_depth=True` for aligned inputs. Optional
+arm/exclusion masks and a scene-specific upper camera-Z separation limit suppress
+foreground occluders. Connected fragments do not define
+object count: similar-color fragments are pooled and distinct touching colors can
+separate. `candidate_count` is an integer color-group hypothesis; `count` is a
+conditional estimate or None when implemented ambiguity checks fail. Neither is
+a certified physical count or bound. Missing observations are not known empty,
+and brightness-only color distinctions, hidden objects, colored shadows and
+near-table arm residue remain fundamental limitations.
+
+`detect_mask(color, object_mask, *, color_order, depth=None,
+background_depth=None, depth_scale_m=None, registered_to_depth=False, ...)`
+accepts an existing bool foreground mask without rerunning segmentation or
+requiring empty RGB. Supply the original depth pair for measured support; RGB
+plus mask alone yields color hypotheses but `count=None`. Optional
+`observed_mask`, `uncertain_mask`, and `cleanup_changed_mask` retain coverage and
+upstream inference, including removed cleanup pixels. Any explicit uncertain or
+cleanup-changed searched pixel blocks an accepted count. See the direct-mask and
+cleanup examples in [OBJECT_COUNT.md](OBJECT_COUNT.md#supply-an-existing-mask-directly)
+and `examples/example_object_count_mask.py`.

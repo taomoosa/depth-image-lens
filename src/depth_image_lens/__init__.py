@@ -73,3 +73,7 @@ __all__ += ["CornerOutlineMatcher"]
 from .mask_cleanup import cleanup_mask, MaskCleanupResult
 
 __all__ += ["cleanup_mask", "MaskCleanupResult"]
+
+from .object_count import OverheadObjectCounter, ObjectCountResult
+
+__all__ += ["OverheadObjectCounter", "ObjectCountResult"]

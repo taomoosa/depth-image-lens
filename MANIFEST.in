@@ -1,6 +1,7 @@
 # Public documentation is explicit; private notes must not enter distributions.
 include LICENSE
 include MASK_CLEANUP.md
+include OBJECT_COUNT.md
 include API.md
 include AUTO.md
 include BACKGROUND_TOLERANCES.md
