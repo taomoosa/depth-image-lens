@@ -91,6 +91,7 @@ threshold are flagged uncertain, whether selected or not.
 | `fusion_mode='color_seeded'` | Preserve strict chroma seeds, then add only nearby relaxed-color pixels with locally supported foreground depth. See [bounded color growth](#bounded-color-growth). |
 | `fusion_mode='depth_anchored'` | Depth-supported anchors plus bounded current full-Lab edge refinement, with separate thin/small-component support and explicit unknown/inference masks. See [depth-anchored refinement](RGBD_ANCHORED.md). |
 | `fusion_mode='color_supported'` | Locally depth-validated color/depth seeds with bounded source-color growth; no unsupported color-only seeds. See [color-supported segmentation](RGBD_COLOR_SUPPORTED.md). |
+| `fusion_mode='color_region'` | Whole 8-connected full-Lab regions tested by valid-depth coverage, clipped mean and support density. No square local support or bounded growth. See [color-region support](RGBD_COLOR_REGION.md). |
 | `missing_depth_policy='color'` (default) | In union/evidence/color_seeded modes, retain that mode's color-only candidates where either depth is missing, marked uncertain. |
 | `missing_depth_policy='unknown'` | Require valid depth even for color candidates; missing depth is unobserved. In depth_required mode, depth is required regardless of this setting. |
 

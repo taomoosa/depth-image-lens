@@ -317,3 +317,10 @@ retain hypotheses when `count=None` and do not need `diagnostics=True`. Standard
 RGB/BGR, depth-only, nonmutation, and explicit PNG-save contracts still apply.
 See [group debugging](OBJECT_COUNT.md#see-which-group-each-pixel-belongs-to) and
 `examples/example_object_count_debug.py`.
+
+### Experimental whole-color-region depth support
+
+`RGBDBackgroundSegmenter(fusion_mode="color_region")` uses connected full-Lab
+regions and region-level clipped depth mean plus foreground density. See
+[parameters, evidence and limitations](RGBD_COLOR_REGION.md) and
+[`example_rgbd_color_region.py`](examples/example_rgbd_color_region.py).
