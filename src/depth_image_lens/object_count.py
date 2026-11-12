@@ -43,6 +43,22 @@ class ObjectCountResult(DebugResultMixin):
             raise ValueError('group_id must identify a current result group')
         return self.label_map == group_id
 
+    def render_debug(self, color=None, *, color_order='RGB', depth=None,
+                     depth_scale_m=.001, mask_alpha=.35, panel=True, max_lines=32,
+                     group_labels=True):
+        """Show color-coded group IDs above the independent evidence-mask tiles.
+
+        Display colors are deterministic by result-local ID, not measured RGB or
+        tracked object identities. The complete legend survives panel=False and
+        max_lines; group_labels=False hides only the spatial ID badges. Candidate
+        groups are still shown when count is None. No detection is rerun.
+        """
+        from .object_count_debug import render_object_count_debug
+        return render_object_count_debug(
+            self, color, color_order=color_order, depth=depth,
+            depth_scale_m=depth_scale_m, mask_alpha=mask_alpha, panel=panel,
+            max_lines=max_lines, group_labels=group_labels)
+
 
 @dataclass
 class _CountEvidence:

@@ -33,6 +33,7 @@ result.save_debug("debug.png", depth=depth_uint16, overwrite=True)
 | `BoundaryResult.filter_outer_proximity` | `BoundaryProximityResult` | Original/selected paths, exclusion band and artificial-border uncertainty; [options](BOUNDARY_PROXIMITY.md). |
 | `OuterContourDetector` | `OuterContourResult` | Ordered straight/curve intervals, corners, clipping and section IDs; [options](OUTLINE.md). |
 | `OverheadCornerDetector` | `CornerResult` | Specialized contour, candidate ID/status/reason overlay; [API](CORNER.md). |
+| `OverheadObjectCounter` | `ObjectCountResult` | Per-group display colors/IDs, complete legend, unresolved count, and independent evidence masks; [API](OBJECT_COUNT.md#see-which-group-each-pixel-belongs-to). |
 
 `analyze_color_geometry` returns ordinary component results; render those
 individually. `CameraIntrinsics`, `TablePlane` and numeric difference helpers have
@@ -52,6 +53,15 @@ result.save_debug(path, color=None, *, color_order='RGB', overwrite=False, **opt
 requested RGB/BGR order; panel/tile dimensions can exceed the source image size.
 Corner, Boundary, Outline and BoundaryProximity have the specialized options below;
 other feature-specific results document their renderers in their own guides.
+
+`ObjectCountResult` prepends a colored group overlay and solid ID map, with a
+complete legend and explicit `count`/`candidate_count`/`state`. Its optional
+`group_labels=True` draws spatial ID badges; `False` hides only those badges.
+`panel=False` and `max_lines` do not remove or truncate the group legend.
+Independent uncertainty, rejection and exclusion masks remain below the group
+view, including when `count=None`. Group IDs/colors are result-local, not tracked
+physical identities. See [group debugging](OBJECT_COUNT.md#see-which-group-each-pixel-belongs-to)
+and `examples/example_object_count_debug.py`.
 
 Common result options: `color_order="RGB"` or `"BGR"` controls both input and
 output; `depth_scale_m=.001`, `mask_alpha=.35`, `panel=True`, `max_lines=32`.

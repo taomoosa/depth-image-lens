@@ -309,3 +309,11 @@ upstream inference, including removed cleanup pixels. Any explicit uncertain or
 cleanup-changed searched pixel blocks an accepted count. See the direct-mask and
 cleanup examples in [OBJECT_COUNT.md](OBJECT_COUNT.md#supply-an-existing-mask-directly)
 and `examples/example_object_count_mask.py`.
+
+`ObjectCountResult.render_debug(..., group_labels=True)` and `save_debug(...)`
+show each retained group with a deterministic display color, spatial IDs, a solid
+label map, and a complete legend, followed by separate evidence masks. They
+retain hypotheses when `count=None` and do not need `diagnostics=True`. Standard
+RGB/BGR, depth-only, nonmutation, and explicit PNG-save contracts still apply.
+See [group debugging](OBJECT_COUNT.md#see-which-group-each-pixel-belongs-to) and
+`examples/example_object_count_debug.py`.

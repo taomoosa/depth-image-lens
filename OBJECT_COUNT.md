@@ -225,8 +225,9 @@ background-segmentation result. Original RGB-D calls report
 
 `to_dict()` produces a strict-JSON-compatible summary. No calibrated confidence
 score or certified physical count interval is provided. `group_mask(id)` returns a
-copy; unknown IDs raise ValueError. `render_debug` uses the shared mask renderer.
-The label map is available for a caller's own per-group overlay.
+copy; unknown IDs raise ValueError. `render_debug` shows a group-colored overlay,
+a solid group map and a complete ID legend above the shared evidence-mask tiles.
+The original `label_map` remains available for custom overlays.
 
 A clean, fully observed empty scene returns `count=0`. An empty ROI, all-excluded
 image, unusable reference or missing observations returns `count=None`, even if
@@ -236,6 +237,83 @@ Any missing color/depth elsewhere in the searchable domain blocks an accepted
 count. This deliberately strict rule avoids treating a sensor hole as an empty
 patch. Narrow the ROI or provide exclusions only for regions you genuinely intend
 to omit, not to conceal uncertainty.
+
+## See which group each pixel belongs to
+
+Both `detect()` and `detect_mask()` return the same group-aware debug API. It does
+not rerun detection or require `diagnostics=True`:
+
+```python
+image_rgb = result.render_debug(current_color, color_order="RGB")
+result.save_debug("object-count.png", current_color, color_order="RGB")
+
+# OpenCV images: both input and returned array are BGR.
+image_bgr = result.render_debug(current_bgr, color_order="BGR", panel=False)
+result.save_debug("object-count-bgr.png", current_bgr, color_order="BGR")
+
+# No color image is required. Depth is a percentile display, not metric height.
+image_rgb = result.render_debug(depth=current_depth, depth_scale_m=.001)
+image_rgb = result.render_debug()  # Neutral background with recorded groups.
+```
+
+The full render signature is:
+
+```python
+result.render_debug(color=None, *, color_order="RGB", depth=None,
+                    depth_scale_m=.001, mask_alpha=.35, panel=True, max_lines=32,
+                    group_labels=True)
+result.save_debug(path, color=None, *, color_order="RGB", overwrite=False, **options)
+```
+
+- The first view overlays each retained group in a different **display color**.
+  `G1`, `G2`, etc. refer directly to `groups[i]['id']`, `label_map` and
+  `group_mask(id)`. Disconnected parts of the same group share the same color
+  and ID; touching different groups receive different colors.
+- The second view shows solid group colors, without source-color blending or
+  badges hiding pixels. This is useful when an overlay color resembles the
+  underlying object. Display colors are not the measured `representative_rgb`.
+- Colors are deterministic by ID and do not cycle after a short palette. The
+  legend contains **every** retained group, its pixel area and fragment count,
+  including with `panel=False` or `max_lines=1`. Many colors may look similar;
+  use the numeric IDs and original label map to disambiguate them.
+- `count`, `candidate_count` and `state` are always shown. `count=None` is printed
+  as unresolved, not replaced by `candidate_count`. Candidate groups still render.
+  A `*` in the legend means group reasons or overlap with `uncertain_mask`, not a
+  confidence score. A zero-candidate unresolved scene is not certified empty.
+- Label 0 is dark gray in the solid map and means **no retained group**, not
+  necessarily background. Separate `rejected_mask`, `uncertain_mask`,
+  `excluded_mask`, `candidate_mask`, and `observed_mask` tiles remain below.
+  Uncertainty can overlap retained groups; it never paints over their group IDs.
+- Spatial badges are placed on visible fragments where they fit without
+  collisions. The image reports how many groups received a badge. Tiny/crowded
+  fragments can omit badges, but their legend entries remain. Set
+  `group_labels=False` to hide badges only. `panel=False` hides the shared scalar
+  summary, not the group legend or evidence tiles.
+- Group views use nearest-neighbor resizing for display, including enlargement
+  of small images. Very small fragments may disappear when downscaled. All
+  measurements and result arrays stay at the original resolution and unchanged.
+- IDs are **local to one result**, not tracked identities across frames. The
+  visualization does not turn color hypotheses into verified physical objects.
+
+`render_debug` returns a fresh uint8 HxWx3 array in the requested order. PNG
+saving is explicit, needs an existing output directory, refuses overwrites by
+default, and uses the shared atomic-save behavior described in
+[DEBUGGING.md](DEBUGGING.md). No new dependency is required beyond the existing
+optional OpenCV extra.
+
+Generate four synthetic PNGs for touching/disconnected groups, mask-only
+hypotheses, uncertainty/exclusions/rejections, and an observed empty scene:
+
+```bash
+mkdir -p debug-output/count-groups
+python examples/example_object_count_debug.py --output-dir debug-output/count-groups
+python -m unittest tests.test_object_count_debug -v
+# Add --overwrite only when intentionally replacing the example PNGs.
+```
+
+These examples do not use private captures, start a camera or GUI, access the
+network, or issue robot commands. Synthetic checks do not establish real-image
+accuracy.
 
 ## Processing and tuning
 
