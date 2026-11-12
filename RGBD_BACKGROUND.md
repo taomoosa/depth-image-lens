@@ -89,6 +89,8 @@ threshold are flagged uncertain, whether selected or not.
 | `fusion_mode='depth_required'` | Only depth foreground. Reduces shadow-driven selection, but misses objects below the depth threshold or with missing depth. |
 | `fusion_mode='evidence'` | Cross-check color and depth, retaining strong supported same-color depth while suppressing unsupported depth with background-color agreement. See the decision rules below. |
 | `fusion_mode='color_seeded'` | Preserve strict chroma seeds, then add only nearby relaxed-color pixels with locally supported foreground depth. See [bounded color growth](#bounded-color-growth). |
+| `fusion_mode='depth_anchored'` | Depth-supported anchors plus bounded current full-Lab edge refinement, with separate thin/small-component support and explicit unknown/inference masks. See [depth-anchored refinement](RGBD_ANCHORED.md). |
+| `fusion_mode='color_supported'` | Locally depth-validated color/depth seeds with bounded source-color growth; no unsupported color-only seeds. See [color-supported segmentation](RGBD_COLOR_SUPPORTED.md). |
 | `missing_depth_policy='color'` (default) | In union/evidence/color_seeded modes, retain that mode's color-only candidates where either depth is missing, marked uncertain. |
 | `missing_depth_policy='unknown'` | Require valid depth even for color candidates; missing depth is unobserved. In depth_required mode, depth is required regardless of this setting. |
 
@@ -100,8 +102,10 @@ Missing either modality and clipped/near-threshold evidence are marked uncertain
 remove a candidate. Unselected pixels without uncertainty merely lack a detected
 change under the declared model; they are not certified background.
 
-No closing, erosion, polygon filling or inferred depth filling is applied.
-Only color_seeded performs bounded mask growth, described below.
+No inferred depth filling is applied. The legacy modes do not close, erode or polygon-fill masks.
+Color_seeded performs bounded mask growth, described below. The separate
+depth_anchored mode performs depth-supported edge refinement; see
+[its contracts, parameters, debug masks and limitations](RGBD_ANCHORED.md).
 In legacy modes, nonconvex shapes, holes, small thin features and multiple components
 are retained as measured. Evidence mode can reject insufficiently supported pixels.
 Optional `min_object_area` removes 8-connected components smaller
@@ -148,7 +152,7 @@ depth. Use `suppressed_mask`, `deferred_mask`, and diagnostic reasons for the ne
 disagreements. No-color foreground is not itself a conflict: same-color objects exist.
 
 The strong-depth setting applies only to evidence selection. The three depth-support
-settings are shared with color_seeded growth; all settings
+settings are shared with color_seeded growth and color_supported seed validation; all settings
 are validated and recorded in every mode:
 
 See the [segmenter settings](RGBD_PICK_TUNING.md#segmenter-settings) for defaults,
@@ -307,7 +311,8 @@ Result masks include `object_mask`, `uncertain_mask`, `observed_mask`,
 `conflict_mask`, `suppressed_mask`, and `deferred_mask`. `observed_mask` describes availability under the fusion policy,
 not semantic certainty and not raw current-depth validity alone. Pass it to
 `OuterContourDetector` so unavailable pixels and ROI cuts are reported as such;
-in evidence/color_seeded modes prefer `outline_observed_mask` as described above.
+in evidence/color_seeded/depth_anchored modes prefer `outline_observed_mask`.
+Depth_anchored additionally excludes nonselected unknown pixels; see its guide.
 Do not use `~uncertain_mask` as the outline observation domain by default: that
 would cut out useful color-only objects and create artificial contours. Propagate
 segmentation uncertainty separately when interpreting outlines. For metric outline
@@ -465,3 +470,10 @@ Useful arrays are the external exclusion/validity/ROI masks and the segmenter's
   depth can still corrupt a silhouette. These synthetic regressions establish
   contracts and explicit failure cases, not real-image accuracy. Validate actual
   registered pairs before choosing deployment thresholds.
+
+## Color-supported local growth
+
+For gray objects with supported depth but weak color difference, and rejection
+of unsupported color-only shadows, see [color_supported](RGBD_COLOR_SUPPORTED.md).
+This opt-in mode retains per-seed colors and bounds expansion; it does not alter
+color_seeded or the default union rule. Missing depth remains unknown.

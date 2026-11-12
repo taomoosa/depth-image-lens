@@ -141,3 +141,223 @@ def color_seeded_fusion(delta, depth_fg, farther, color_fg, color_usable,
                  accepted_both_mask=both, accepted_color_only_mask=color_only,
                  accepted_depth_only_mask=np.zeros(delta.shape, bool))
     return selected, suppressed, deferred, debug
+
+
+ANCHORED_DECISION_REASONS = {
+    0: 'no_selected_change_or_unavailable',
+    1: 'supported_depth_anchor',
+    2: 'directional_thin_depth_anchor',
+    3: 'supported_background_anchor',
+    4: 'unselected_raw_depth_candidate_unresolved',
+    5: 'unresolved_color_or_boundary_candidate',
+    6: 'removed_by_min_object_area',
+    7: 'color_edge_refined_foreground_inference',
+}
+
+
+def _shift(array, dy, dx, fill=0):
+    """Neighbor lookup with explicit outside value, never wrapping the image."""
+    out = np.full_like(array, fill)
+    h, w = array.shape[:2]
+    if abs(dy) < h and abs(dx) < w:
+        out[max(0, -dy):min(h, h-dy), max(0, -dx):min(w, w-dx)] = array[
+            max(0, dy):min(h, h+dy), max(0, dx):min(w, w+dx)]
+    return out
+
+
+def _erode(mask, steps):
+    out = mask.copy()
+    for _ in range(steps):
+        out = np.logical_and.reduce([_shift(out, dy, dx, False)
+                                     for dy in (-1, 0, 1) for dx in (-1, 0, 1)])
+    return out
+
+
+def depth_anchored_fusion(delta, depth_fg, farther, color_fg, color_usable,
+                          color_uncertain, lab, edge_valid, color_debug, valid,
+                          roi, parameters):
+    """Depth anchors and bounded full-Lab diffusion refinement, not probabilities.
+
+    A color-compatible 3x3 median rejects isolated noise without blurring a
+    visible one-pixel feature across its RGB edge. A separate directional raw
+    depth path protects supported thin structures even without a color edge.
+    Bounded Jacobi relaxation is NOT an exact graph cut and does not guarantee
+    convergence within the budget. Spatial support does not verify material.
+    """
+    p = parameters
+    t = p['depth_threshold_m']
+    sigma = p['anchored_color_sigma']
+    # Work with clipped dimensionless evidence to keep unusual finite input
+    # scales and arithmetic safe. Raw metric evidence is returned unchanged.
+    with np.errstate(over='ignore', invalid='ignore'):
+        d = np.clip(delta / t, -4., 4.)
+    neighbors = []
+    strong_neighbors = np.zeros(valid.shape, np.uint8)
+    with np.errstate(over='ignore', invalid='ignore'):
+        strong = valid & (delta / t > p['anchored_anchor_ratio'])
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            nv = _shift(valid, dy, dx, False)
+            nd = _shift(d, dy, dx, np.nan)
+            nc = _shift(lab, dy, dx)
+            both_color = edge_valid & _shift(edge_valid, dy, dx, False)
+            distance = np.sqrt(np.sum((lab - nc) ** 2, axis=2))
+            compatible = ~both_color | (distance <= sigma * 2)
+            neighbors.append(np.where(nv & compatible, nd, np.nan))
+            if dy or dx:
+                strong_neighbors += _shift(strong, dy, dx, False)
+    # Every valid center includes itself. Invalid centers are unused but use a
+    # finite placeholder to avoid all-NaN median warnings at sensor/ROI gaps.
+    stack = np.stack(neighbors)
+    stack[:, ~valid] = 0.
+    robust = np.nanmedian(stack, axis=0)
+    coarse = valid & ~farther & (robust > 1.)
+    reliable_reference = color_usable & ~color_uncertain & ~color_debug['background_photometric_clipped_mask']
+    reference_agrees = reliable_reference & (color_debug['background_combined_score'] < .25)
+    # Spatial consistency can support shallow (>T) noiseless interiors without
+    # pretending that a high fixed anchor threshold is a noise calibration.
+    local_low = np.minimum.reduce([_shift(delta, dy, dx, np.inf)
+                                   for dy in (-1, 0, 1) for dx in (-1, 0, 1)])
+    local_high = np.maximum.reduce([_shift(delta, dy, dx, -np.inf)
+                                    for dy in (-1, 0, 1) for dx in (-1, 0, 1)])
+    with np.errstate(over='ignore', invalid='ignore'):
+        local_range = local_high - local_low
+    stable = (_erode(depth_fg, 1) & np.isfinite(local_range) &
+              (local_range <= p['depth_support_tolerance_m']))
+    body = (_erode(coarse, 2) & strong) | stable
+    # Where RGB agrees with the empty scene, keep positive anchors farther from
+    # mixed depth edges. This is not a veto of same-color objects.
+    body &= ~reference_agrees | _erode(coarse, 3)
+    # Opposite supported neighbors identify a thin run, including diagonals.
+    # Endpoints are accepted only next to such a run, not arbitrary speckles.
+    thin_run = np.zeros(valid.shape, bool)
+    for dy, dx in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        across = (_shift(valid & (d < 1), -dx, dy, False) &
+                  _shift(valid & (d < 1), dx, -dy, False))
+        with np.errstate(over='ignore', invalid='ignore'):
+            mismatch = np.maximum(np.abs(delta - _shift(delta, dy, dx, np.nan)),
+                                  np.abs(delta - _shift(delta, -dy, -dx, np.nan)))
+            tolerance = p['depth_support_tolerance_m']
+        cross_color = (edge_valid & _shift(edge_valid, -dx, dy, False) &
+                       _shift(edge_valid, dx, -dy, False) &
+                       (np.linalg.norm(lab - _shift(lab, -dx, dy), axis=2) > sigma) &
+                       (np.linalg.norm(lab - _shift(lab, dx, -dy), axis=2) > sigma))
+        consistent = (mismatch <= tolerance) & (cross_color | (mismatch <= .1 * tolerance))
+        along = ((strong & _shift(strong, dy, dx, False) & _shift(strong, -dy, -dx, False)) |
+                 (_shift(depth_fg, dy, dx, False) & _shift(depth_fg, -dy, -dx, False) & consistent))
+        thin_run |= along & across
+        # Aggregate along a visible narrow RGB run instead of across it. This
+        # supports noisy 1px branches without a square-core requirement. Only
+        # real above-threshold center depth can become a thin anchor.
+        samples = []
+        for step in range(-2, 3):
+            neighbor_valid = _shift(valid & edge_valid, step * dy, step * dx, False)
+            color_close = np.linalg.norm(lab - _shift(lab, step * dy, step * dx), axis=2) <= sigma
+            samples.append(np.where(neighbor_valid & color_close,
+                                    _shift(d, step * dy, step * dx, np.nan), np.nan))
+        sample_stack = np.stack(samples)
+        enough = np.isfinite(sample_stack).sum(axis=0) >= 3
+        sample_stack[:, ~enough] = 0.
+        run_depth = np.nanmedian(sample_stack, axis=0)
+        thin_run |= cross_color & ~reference_agrees & enough & (run_depth > 1.)
+    thin_run &= depth_fg & (strong_neighbors <= 4)
+    endpoints = np.zeros(valid.shape, bool)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy or dx:
+                with np.errstate(over='ignore', invalid='ignore'):
+                    agrees = np.abs(delta - _shift(delta, dy, dx, np.nan)) <= .1 * tolerance
+                endpoints |= _shift(thin_run, dy, dx, False) & (strong | agrees)
+    thin = thin_run | (depth_fg & (strong_neighbors <= 2) & endpoints)
+    coarse |= thin
+    # Small coherent components need not contain an eroded 2D core either.
+    from .debug import _opencv
+    cv = _opencv()
+    n, small_labels, stats, _ = cv.connectedComponentsWithStats(depth_fg.astype(np.uint8), connectivity=8)
+    area = stats[:, cv.CC_STAT_AREA]
+    count = np.bincount(small_labels[strong & depth_fg], minlength=n)
+    small_keep = (area >= 3) & (area <= 25) & (count >= .8 * area)
+    small_keep[0] = False
+    small = small_keep[small_labels] & strong
+    coarse |= small
+    anchors = body | thin | small
+    # A component without any reliable positive support cannot create an object
+    # merely because RGB is dark/colored. Avoid an extra external dependency.
+    _, labels = cv.connectedComponents(coarse.astype(np.uint8), connectivity=8)
+    keep = np.zeros(int(labels.max()) + 1, bool)
+    keep[labels[anchors]] = True
+    keep[0] = False
+    domain = keep[labels]
+    for _ in range(p['anchored_refine_radius_px']):
+        domain |= _neighbors8(domain) & valid & ~farther
+    domain &= valid & ~farther
+    raw_near_table = valid & (np.abs(d) < .5)
+    near_table = raw_near_table & (np.abs(robust) < .5)
+    # Preserve isolated observed table pixels (including 1px holes) when RGB
+    # agrees with the reference. Without robust support they stay unknown,
+    # not confident background. A median must not erase this raw counterevidence.
+    raw_background_guard = raw_near_table & reference_agrees & ~near_table
+    background_anchors = (_erode(near_table, 1) |
+                          (near_table & reference_agrees) | farther) & ~anchors
+    excluded = ~domain & valid
+    negative = (excluded | background_anchors | raw_background_guard) & ~anchors
+    # Internal current-image edges are useful even when subtraction was rejected
+    # or the object is black/white. Missing current color gives neutral affinity.
+    weights = []
+    for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+        both = valid & _shift(valid, dy, dx, False)
+        color_pair = edge_valid & _shift(edge_valid, dy, dx, False)
+        distance2 = np.sum((lab - _shift(lab, dy, dx)) ** 2, axis=2)
+        # Divide in stages rather than square a potentially huge finite sigma.
+        with np.errstate(over='ignore', under='ignore', invalid='ignore'):
+            scaled = distance2 / sigma / sigma
+            affinity = np.where(color_pair, np.exp(-.5 * scaled), 1.)
+        weights.append((dy, dx, p['anchored_pairwise_weight'] * affinity * both))
+    # Bounded Jacobi relaxation of a color-weighted quadratic energy. This is
+    # a deterministic continuous support score, not a posterior probability.
+    unary = np.clip((robust - 1.) / 3. + .5, 0., 1.)
+    score = (coarse & domain & ~negative).astype(float)
+    score[anchors & domain] = 1.
+    mutable = domain & ~anchors & ~negative
+    data_weight = .2
+    denominator = data_weight + sum(weight for _, _, weight in weights)
+    iterations = 0
+    for iteration in range(p['anchored_iterations']):
+        numerator = data_weight * unary
+        for dy, dx, weight in weights:
+            numerator = numerator + weight * _shift(score, dy, dx, 0.)
+        update = np.clip(numerator / denominator, 0., 1.)
+        change = float(np.max(np.abs(update[mutable] - score[mutable]))) if mutable.any() else 0.
+        score[mutable] = update[mutable]
+        iterations = iteration + 1
+        if change < 1e-5:
+            break
+    selected = (score > .5) & domain & ~negative
+    selected |= anchors & domain
+    inferred = selected & ~anchors
+    # Confidence is only a conservative rule category: require independent
+    # usable color subtraction and depth support away from the final boundary.
+    # Same-color depth anchors and all RGB-refined geometry stay uncertain.
+    confident_fg = (body & selected & _erode(selected, 1) & reliable_reference & color_fg &
+                    (delta > t + p['depth_margin_m']))
+    confident_bg = negative & near_table & reference_agrees
+    unknown = roi & ~(confident_fg | confident_bg)
+    suppressed = depth_fg & ~selected
+    deferred = roi & ~selected & ~suppressed & ~confident_bg & (domain | color_fg | farther)
+    decision = np.zeros(valid.shape, np.uint8)
+    for code, mask in ((3, background_anchors), (4, suppressed), (5, deferred),
+                       (1, selected & (body | small)), (2, selected & thin & ~body & ~small), (7, inferred)):
+        decision[mask] = code
+    debug = dict(fusion_decision=decision, robust_depth_ratio=robust,
+                 current_color_edge_valid_mask=edge_valid,
+                 foreground_anchor_mask=anchors, thin_depth_anchor_mask=thin,
+                 small_component_anchor_mask=small,
+                 background_anchor_mask=background_anchors, raw_background_guard_mask=raw_background_guard,
+                 refinement_domain_mask=domain,
+                 refinement_excluded_mask=excluded,
+                 inferred_foreground_mask=inferred,
+                 confident_foreground_mask=confident_fg,
+                 confident_background_mask=confident_bg, unknown_mask=unknown,
+                 refinement_iterations=iterations, refinement_score=score,
+                 refinement_converged=change < 1e-5, refinement_max_update=change)
+    return selected, suppressed, deferred, debug

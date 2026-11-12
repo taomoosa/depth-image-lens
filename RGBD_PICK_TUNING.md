@@ -129,7 +129,7 @@ not promise monotonic improvements in accuracy.
 | `background_score_margin` | .2; 0..1 | Widen uncertainty around ellipse radius 1; also changes evidence confirmation/background agreement and strict chroma seeds |
 | `depth_threshold_m` | .005; >0 metres | Increase to reject smaller changes; decrease to admit thinner objects and noise. Also sets the negative farther-change threshold |
 | `depth_margin_m` | .001; >=0 and < depth threshold | Widen threshold uncertainty without changing raw depth foreground; may exclude more downstream pick pixels |
-| `fusion_mode` | `'union'`; `'union'`, `'depth_required'`, `'evidence'`, `'color_seeded'` | Choose evidence policy, not a confidence level; see the API's fusion rules |
+| `fusion_mode` | `'union'`; `'union'`, `'depth_required'`, `'evidence'`, `'color_seeded'`, `'depth_anchored'`, `'color_supported'` | Choose evidence policy, not a confidence level; see the API's fusion rules |
 | `missing_depth_policy` | `'color'`; `'color'` or `'unknown'` | Keep the chosen mode's color candidates with uncertainty, or require depth. Depth-required always requires depth |
 | `min_object_area` | 1; int >=1 pixels | Remove smaller 8-connected components with uncertainty; does not fill holes or split touching objects |
 | `background_compensate` | False; bool | Apply global median Lab offset from at least 25 valid known-background check pixels; does not fix local shadows or registration |
@@ -141,6 +141,11 @@ not promise monotonic improvements in accuracy.
 | `depth_support_tolerance_m` | .003; >=0 metres | Widen agreement in neighbor/center dZ to tolerate slopes and noise; zero means exact floating-point equality |
 | `color_relaxation_ratio` | .5; (0,1] | Seeded growth only: lower values admit weaker color changes; seed threshold is unchanged |
 | `color_growth_max_steps` | 2; int 0..20 | Seeded growth only: maximum 8-neighbor steps from an initial seed; zero returns seeds only |
+| `anchored_color_sigma` | 12; (0,441] | Depth-anchored only: current full-Lab affinity scale |
+| `anchored_pairwise_weight` | 2; [0,100] | Depth-anchored neighbor weight relative to fixed unary weight .2 |
+| `anchored_refine_radius_px` | 4; int 0..20 | Depth-anchored domain expansion radius |
+| `anchored_iterations` | 24; int 1..100 | Maximum bounded diffusion updates |
+| `anchored_anchor_ratio` | 2; [1,4] | Strong raw-depth threshold multiple; alternative shallow/thin paths also apply |
 
 Color foreground uses `score=(dC/Tc)^2+(dL/Tl)^2 > 1`; the uncertainty margin
 applies to `sqrt(score)`, not score. This is neither a probability nor standard
@@ -462,3 +467,21 @@ on recorded arrays likewise test input handling, not genuine empty/current
 accuracy. Independent registered real-pair accuracy and physical grasp success
 remain unvalidated. Broad elevated flat sheets can pass, while thin creases or
 steep slopes can fail support/width requirements.
+
+## Depth-anchored refinement
+
+For gray objects and depth-supported boundary refinement, compare the opt-in
+`fusion_mode='depth_anchored'` with depth_required and existing modes. See
+[the mode guide](RGBD_ANCHORED.md) for current-RGB edge use, thin support,
+unknown/inference masks, parameter tradeoffs, runnable example and known failures.
+Missing depth is always unknown in this mode. Its confidence categories are
+heuristics and can be wrong under coherent depth bias; they do not certify grasp
+safety. `depth_support_tolerance_m` also controls raw spatial consistency here.
+
+## Color-supported local growth
+
+The opt-in `color_supported` mode validates seeds with local depth and allows
+only bounded growth matching their source colors, including luminance. See
+[its settings and tuning order](RGBD_COLOR_SUPPORTED.md#settings-and-tuning) and
+run `python examples/example_rgbd_color_supported.py`. Parameters are distinct
+from color_seeded/anchored settings; no-depth candidates stay unknown.

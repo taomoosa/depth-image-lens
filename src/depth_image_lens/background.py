@@ -6,7 +6,9 @@ from .debug import DebugResultMixin, _opencv
 from .depth import _numeric_image, _validate_depth_scale, _invalid_values
 from .geometry import bool_mask
 from ._rgbd_fusion import (evidence_fusion, color_seeded_fusion, DECISION_REASONS,
-                           SEEDED_DECISION_REASONS)
+                           SEEDED_DECISION_REASONS, depth_anchored_fusion, ANCHORED_DECISION_REASONS)
+
+from ._rgbd_color_supported import color_supported_fusion, SUPPORTED_DECISION_REASONS
 
 
 @dataclass(frozen=True)
@@ -25,11 +27,17 @@ class RGBDBackgroundResult(DebugResultMixin):
     scope: str = 'registered_change_candidates_not_semantic_objects_or_verified_material_edges'
     suppressed_mask: np.ndarray | None = field(default=None, repr=False)
     deferred_mask: np.ndarray | None = field(default=None, repr=False)
+    confident_foreground_mask: np.ndarray | None = field(default=None, repr=False)
+    confident_background_mask: np.ndarray | None = field(default=None, repr=False)
+    unknown_mask: np.ndarray | None = field(default=None, repr=False)
+    inferred_foreground_mask: np.ndarray | None = field(default=None, repr=False)
 
     @property
     def outline_observed_mask(self):
         """Availability excluding unresolved decisions; does not remove all uncertainty."""
         observed = self.observed_mask.copy()
+        if self.unknown_mask is not None:
+            observed &= ~self.unknown_mask | self.object_mask
         for mask in (self.suppressed_mask, self.deferred_mask):
             if mask is not None:
                 observed &= ~mask
@@ -97,6 +105,16 @@ class RGBDBackgroundResult(DebugResultMixin):
                           '2: unused in this mode', '3: strict seed (color only)',
                           '4: depth suppressed (unresolved)', '5: deferred (unresolved)',
                           '6: area filtered', '7: bounded growth (uncertain)']
+            elif self.parameters['fusion_mode'] == 'color_supported':
+                labels = ['0: no change / unavailable', '1: color + supported depth seed',
+                          '2: strong depth seed', '3: unsupported color (unresolved)',
+                          '4: unsupported depth', '5: unresolved local evidence',
+                          '6: area filtered', '7: seed-color growth (uncertain)']
+            elif self.parameters['fusion_mode'] == 'depth_anchored':
+                labels = ['0: no change / unavailable', '1: supported depth anchor',
+                          '2: thin depth anchor', '3: background anchor',
+                          '4: raw depth unresolved', '5: boundary/color unresolved',
+                          '6: area filtered', '7: RGB refinement (uncertain)']
             for i, label in enumerate(labels):
                 ink = palette[i] if color_order == 'RGB' else palette[i, ::-1]
                 if i == 0:
@@ -113,6 +131,10 @@ class RGBDBackgroundSegmenter:
     background check/offset compensation. Depth is signed empty-current camera Z.
     Inputs are never modified. No registration or depth filling occurs.
     Optional color_seeded mode adds bounded, evidence-gated mask growth.
+    depth_anchored mode refines depth-supported geometry with current RGB edges;
+    missing depth remains unknown regardless of missing_depth_policy.
+    color_supported validates every seed with local depth and grows source colors
+    only within a bounded neighborhood; it also never fills missing depth.
     """
     def __init__(self, *, background_chroma_tolerance=20., background_luma_tolerance=60.,
                  background_score_margin=.2, depth_threshold_m=.005, depth_margin_m=.001,
@@ -120,9 +142,21 @@ class RGBDBackgroundSegmenter:
                  background_compensate=False, background_check_p95=20., background_max_offset=40.,
                  strong_depth_ratio=3., depth_support_radius_px=1,
                  depth_support_fraction=.25, depth_support_tolerance_m=.003,
-                 color_relaxation_ratio=.5, color_growth_max_steps=2):
-        if fusion_mode not in ('union', 'depth_required', 'evidence', 'color_seeded'):
-            raise ValueError('fusion_mode must be union, depth_required, evidence or color_seeded')
+                 color_relaxation_ratio=.5, color_growth_max_steps=2,
+                 anchored_color_sigma=12., anchored_pairwise_weight=2.,
+                 anchored_refine_radius_px=4, anchored_iterations=24, anchored_anchor_ratio=2.,
+                 supported_color_tolerance=18., supported_growth_radius_px=4,
+                 supported_min_seed_area=3, supported_min_depth_fraction=.1,
+                 supported_anchor_ratio=2., supported_relaxation_ratio=.2):
+        if fusion_mode not in ('union', 'depth_required', 'evidence', 'color_seeded', 'depth_anchored', 'color_supported'):
+            raise ValueError('fusion_mode must be union, depth_required, evidence, color_seeded, depth_anchored or color_supported')
+        for key, value, lower, upper in (('anchored_refine_radius_px', anchored_refine_radius_px, 0, 20),
+                                          ('anchored_iterations', anchored_iterations, 1, 100),
+                                          ('supported_growth_radius_px', supported_growth_radius_px, 0, 20)):
+            if type(value) is not int or not lower <= value <= upper:
+                raise ValueError(f'{key} must be an integer in {lower}..{upper}')
+        if type(supported_min_seed_area) is not int or supported_min_seed_area < 1:
+            raise ValueError('supported_min_seed_area must be a positive integer')
         if type(color_growth_max_steps) is not int or not 0 <= color_growth_max_steps <= 20:
             raise ValueError('color_growth_max_steps must be an integer in 0..20')
         if type(depth_support_radius_px) is not int or not 1 <= depth_support_radius_px <= 5:
@@ -140,7 +174,14 @@ class RGBDBackgroundSegmenter:
                        background_check_p95=background_check_p95, background_max_offset=background_max_offset,
                        strong_depth_ratio=strong_depth_ratio, depth_support_fraction=depth_support_fraction,
                        depth_support_tolerance_m=depth_support_tolerance_m,
-                       color_relaxation_ratio=color_relaxation_ratio)
+                       color_relaxation_ratio=color_relaxation_ratio,
+                       anchored_color_sigma=anchored_color_sigma,
+                       anchored_pairwise_weight=anchored_pairwise_weight,
+                       anchored_anchor_ratio=anchored_anchor_ratio,
+                       supported_color_tolerance=supported_color_tolerance,
+                       supported_min_depth_fraction=supported_min_depth_fraction,
+                       supported_anchor_ratio=supported_anchor_ratio,
+                       supported_relaxation_ratio=supported_relaxation_ratio)
         for key, value in numeric.items():
             if isinstance(value, (bool, np.bool_)) or not np.isscalar(value):
                 raise ValueError(f'{key} must be a finite number')
@@ -154,6 +195,19 @@ class RGBDBackgroundSegmenter:
                     'depth_threshold_m', 'background_check_p95', 'background_max_offset'):
             if numeric[key] <= 0:
                 raise ValueError(f'{key} must be positive')
+        if not 0 < numeric['supported_color_tolerance'] <= 441:
+            raise ValueError('supported_color_tolerance must be in (0,441]')
+        for key in ('supported_min_depth_fraction', 'supported_relaxation_ratio'):
+            if not 0 < numeric[key] <= 1:
+                raise ValueError(f'{key} must be in (0,1]')
+        if not 1 <= numeric['supported_anchor_ratio'] <= 4:
+            raise ValueError('supported_anchor_ratio must be in [1,4]')
+        if not 0 < numeric['anchored_color_sigma'] <= 441:
+            raise ValueError('anchored_color_sigma must be in (0,441]')
+        if numeric['anchored_pairwise_weight'] > 100:
+            raise ValueError('anchored_pairwise_weight must be in [0,100]')
+        if not 1 <= numeric['anchored_anchor_ratio'] <= 4:
+            raise ValueError('anchored_anchor_ratio must be in [1,4]')
         if numeric['background_score_margin'] > 1:
             raise ValueError('background_score_margin must be in [0,1]')
         if numeric['depth_margin_m'] >= numeric['depth_threshold_m']:
@@ -167,7 +221,11 @@ class RGBDBackgroundSegmenter:
         self.parameters = dict(numeric, fusion_mode=fusion_mode, missing_depth_policy=missing_depth_policy,
                                min_object_area=min_object_area, background_compensate=background_compensate,
                                depth_support_radius_px=depth_support_radius_px,
-                               color_growth_max_steps=color_growth_max_steps)
+                               color_growth_max_steps=color_growth_max_steps,
+                               anchored_refine_radius_px=anchored_refine_radius_px,
+                               anchored_iterations=anchored_iterations,
+                               supported_growth_radius_px=supported_growth_radius_px,
+                               supported_min_seed_area=supported_min_seed_area)
 
     def detect(self, color, depth, *, background_color, background_depth,
                color_order, registered_to_depth=False, depth_scale_m,
@@ -199,7 +257,8 @@ class RGBDBackgroundSegmenter:
         def mask(value, name):
             return np.ones(shape, bool) if value is None else bool_mask(value, shape, name).copy()
         roi = mask(work_roi, 'work_roi')
-        color_valid = mask(color_valid_mask, 'color_valid_mask') & mask(background_color_valid_mask, 'background_color_valid_mask')
+        current_color_valid = mask(color_valid_mask, 'color_valid_mask')
+        color_valid = current_color_valid & mask(background_color_valid_mask, 'background_color_valid_mask')
         if background_check_mask is not None or self.parameters['background_compensate']:
             check = (np.zeros(shape, bool) if background_check_mask is None else
                      bool_mask(background_check_mask, shape, 'background_check_mask'))
@@ -238,7 +297,8 @@ class RGBDBackgroundSegmenter:
             color_info.pop('fallback', None)
             color_info['selection_action'] = ('disable_color_require_strong_supported_depth'
                 if p['fusion_mode'] == 'evidence' else 'disable_color_no_seeds'
-                if p['fusion_mode'] == 'color_seeded' else 'disable_color_evidence_keep_depth')
+                if p['fusion_mode'] == 'color_seeded' else 'disable_reference_difference_keep_current_rgb_edges'
+                if p['fusion_mode'] == 'depth_anchored' else 'disable_color_evidence_keep_depth')
         color_info['difference_model']['applied_to_selection'] = bool(
             p['fusion_mode'] != 'depth_required' and color_usable.any())
         color_fg &= color_usable
@@ -275,6 +335,19 @@ class RGBDBackgroundSegmenter:
                 delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
                 color_debug, valid, p)
             uncertain |= suppressed | deferred | fusion_debug['accepted_growth_mask']
+        elif p['fusion_mode'] == 'depth_anchored':
+            obj, suppressed, deferred, fusion_debug = depth_anchored_fusion(
+                delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
+                lab, current_color_valid & roi, color_debug, valid, roi, p)
+            observed = valid.copy()
+            uncertain = fusion_debug['unknown_mask'].copy()
+        elif p['fusion_mode'] == 'color_supported':
+            obj, suppressed, deferred, fusion_debug = color_supported_fusion(
+                delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
+                lab, current_color_valid & roi, color_debug, valid, roi, p)
+            observed = valid.copy()
+            uncertain |= fusion_debug['unknown_mask']
+            fusion_debug['unknown_mask'] = uncertain.copy()
         filtered = np.zeros(shape, bool)
         if p['min_object_area'] > 1:
             labels, parts = _components(obj)
@@ -291,6 +364,13 @@ class RGBDBackgroundSegmenter:
                             'accepted_growth_mask'):
                     if key in fusion_debug:
                         fusion_debug[key] &= ~filtered
+        if p['fusion_mode'] == 'color_supported':
+            for key in ('supported_seed_mask', 'color_seed_mask', 'depth_seed_mask'):
+                fusion_debug[key] &= ~filtered
+        if p['fusion_mode'] in ('depth_anchored', 'color_supported'):
+            fusion_debug['inferred_foreground_mask'] &= ~filtered
+            fusion_debug['confident_foreground_mask'] &= ~filtered
+            fusion_debug['unknown_mask'] |= filtered
         status = ('empty_domain' if not roi.any() else 'insufficient' if not observed.any()
                   else 'candidate' if obj.any() else 'unresolved' if (suppressed | deferred).any()
                   else 'no_change_candidate')
@@ -299,7 +379,9 @@ class RGBDBackgroundSegmenter:
                                   rule={'union': 'depth_foreground OR (color_foreground AND NOT farther)',
                                         'depth_required': 'depth_foreground_only',
                                         'evidence': 'color_confirmation_or_strong_supported_depth_or_chroma_candidate',
-                                        'color_seeded': 'strict_chroma_seeds_plus_bounded_relaxed_color_supported_depth_growth'}[p['fusion_mode']],
+                                        'color_seeded': 'strict_chroma_seeds_plus_bounded_relaxed_color_supported_depth_growth',
+                                        'depth_anchored': 'depth_anchors_and_bounded_full_lab_diffusion_refinement',
+                                        'color_supported': 'depth_validated_seeds_and_bounded_local_seed_color_growth'}[p['fusion_mode']],
                                   warnings=['alignment_and_empty_reference_are_caller_assumptions',
                                             'color_only_change_can_be_shadow_or_thin_object',
                                             'no_change_does_not_prove_no_object',
@@ -309,8 +391,10 @@ class RGBDBackgroundSegmenter:
                        observed_pixels=int(observed.sum()), color_foreground_pixels=int(color_fg.sum()),
                        depth_foreground_pixels=int(depth_fg.sum()), conflict_pixels=int(conflict.sum()),
                        filtered_pixels=int(filtered.sum()))
-        if p['fusion_mode'] in ('evidence', 'color_seeded'):
-            reasons = SEEDED_DECISION_REASONS if p['fusion_mode'] == 'color_seeded' else DECISION_REASONS
+        if p['fusion_mode'] in ('evidence', 'color_seeded', 'depth_anchored', 'color_supported'):
+            reasons = (SUPPORTED_DECISION_REASONS if p['fusion_mode'] == 'color_supported' else
+                       ANCHORED_DECISION_REASONS if p['fusion_mode'] == 'depth_anchored' else
+                       SEEDED_DECISION_REASONS if p['fusion_mode'] == 'color_seeded' else DECISION_REASONS)
             stages['fusion']['decision_reasons'] = {str(code): reason for code, reason in reasons.items()}
             stages['fusion']['warnings'] += ['spatial_support_is_not_temporal_stability_or_probability',
                                              'suppressed_and_deferred_pixels_are_not_confirmed_background']
@@ -325,6 +409,31 @@ class RGBDBackgroundSegmenter:
                 'color_misalignment_and_colored_shadows_can_seed_false_objects']
             metrics.update(seed_pixels=int(fusion_debug['color_seed_mask'].sum()),
                            grown_pixels=int(fusion_debug['accepted_growth_mask'].sum()))
+        if p['fusion_mode'] == 'depth_anchored':
+            stages['fusion']['warnings'] += [
+                'confidence_is_heuristic_evidence_not_calibrated_probability_or_material_truth',
+                'coherent_depth_bias_and_corrupted_holes_can_pass',
+                'refinement_is_local_not_global_optimum_or_registration_correction',
+                'missing_depth_is_always_unknown_in_this_mode',
+                'inferred_geometry_is_not_measured_depth_or_safe_grasp_support']
+            metrics.update({key + '_pixels': int(fusion_debug[key + '_mask'].sum())
+                            for key in ('confident_foreground', 'confident_background', 'unknown',
+                                        'inferred_foreground', 'foreground_anchor', 'thin_depth_anchor')})
+            for key in ('refinement_iterations', 'refinement_converged', 'refinement_max_update'):
+                metrics[key] = fusion_debug[key]
+            if not fusion_debug['refinement_converged']:
+                stages['fusion']['warnings'].append('refinement_iteration_budget_reached')
+        if p['fusion_mode'] == 'color_supported':
+            stages['fusion']['warnings'] += [
+                'color_only_candidates_require_local_depth_supported_seeds',
+                'growth_is_bounded_local_full_lab_inference_not_depth_measurement',
+                'missing_depth_is_always_unknown_in_this_mode',
+                'coherent_depth_bias_and_similar_colored_touching_shadows_can_pass',
+                'unseeded_thin_or_shallow_objects_can_be_lost',
+                'confidence_is_heuristic_not_physical_truth_or_grasp_safety']
+            metrics.update({key + '_pixels': int(fusion_debug[key + '_mask'].sum())
+                            for key in ('supported_seed', 'color_seed', 'depth_seed',
+                                        'inferred_foreground', 'unsupported_color', 'support_rejected')})
         debug = {}
         if diagnostics:
             debug = dict(color_debug, **fusion_debug, depth_difference_m=delta, color_usable_mask=color_usable,
@@ -332,4 +441,7 @@ class RGBDBackgroundSegmenter:
                          color_only_mask=color_fg & ~depth_fg, filtered_mask=filtered, work_roi=roi)
         return RGBDBackgroundResult(obj, uncertain, observed, color_fg, depth_fg, valid, conflict,
                                     p.copy(), stages, metrics, debug,
-                                    suppressed_mask=suppressed, deferred_mask=deferred)
+                                    suppressed_mask=suppressed, deferred_mask=deferred,
+                                    **{key: fusion_debug.get(key) for key in (
+                                        'confident_foreground_mask', 'confident_background_mask',
+                                        'unknown_mask', 'inferred_foreground_mask')})

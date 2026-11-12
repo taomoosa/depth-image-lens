@@ -22,6 +22,8 @@ include README.md
 include REFERENCE.md
 include RGBD.md
 include RGBD_BACKGROUND.md
+include RGBD_ANCHORED.md
+include RGBD_COLOR_SUPPORTED.md
 include RGBD_PICK_TUNING.md
 include SURFACE.md
 include TUNING.md
