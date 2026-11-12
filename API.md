@@ -312,6 +312,15 @@ cleanup-changed searched pixel blocks an accepted count. See the direct-mask and
 cleanup examples in [OBJECT_COUNT.md](OBJECT_COUNT.md#supply-an-existing-mask-directly)
 and `examples/example_object_count_mask.py`.
 
+Optional `detect_mask(..., background_color=empty_color,
+background_color_valid_mask=..., background_check_mask=...)` conservatively
+removes color-matching table leakage supported by near-zero measured depth.
+Configure independent `background_match_chroma_tolerance=8.0` and
+`background_match_luma_tolerance=12.0` on the counter. Missing-depth matches are
+retained, and thin same-table-color objects remain ambiguous. See
+[background filtering](OBJECT_COUNT.md#empty-color-reference-with-an-external-mask)
+and `examples/example_object_count_mask_background.py`.
+
 `ObjectCountResult.render_debug(..., group_labels=True)` and `save_debug(...)`
 show each retained group with a deterministic display color, spatial IDs, a solid
 label map, and a complete legend, followed by separate evidence masks. They

@@ -79,6 +79,7 @@ class _CountEvidence:
     color_foreground_mask: np.ndarray | None = None
     input_uncertain_mask: np.ndarray | None = None
     cleanup_changed_mask: np.ndarray | None = None
+    background_match_masks: dict | None = None
 
 
 def _chromaticity(rgb):
@@ -156,7 +157,8 @@ class OverheadObjectCounter:
                  color_margin=4., min_object_area=64, min_fragment_area=8,
                  min_depth_support_fraction=.1, exclusion_guard_px=2,
                  max_reference_separation_m=None, max_color_groups=32,
-                 min_brightness=24., min_saturation=.12, stability_fraction=.2):
+                 min_brightness=24., min_saturation=.12, stability_fraction=.2,
+                 background_match_chroma_tolerance=8., background_match_luma_tolerance=12.):
         if background_segmenter is not None and not isinstance(background_segmenter, RGBDBackgroundSegmenter):
             raise ValueError('background_segmenter must be RGBDBackgroundSegmenter or None')
         for name, value in dict(min_object_area=min_object_area, min_fragment_area=min_fragment_area,
@@ -170,7 +172,9 @@ class OverheadObjectCounter:
         numeric = dict(color_tolerance=color_tolerance, color_margin=color_margin,
                        min_depth_support_fraction=min_depth_support_fraction,
                        min_brightness=min_brightness, min_saturation=min_saturation,
-                       stability_fraction=stability_fraction)
+                       stability_fraction=stability_fraction,
+                       background_match_chroma_tolerance=background_match_chroma_tolerance,
+                       background_match_luma_tolerance=background_match_luma_tolerance)
         if max_reference_separation_m is not None:
             numeric['max_reference_separation_m'] = max_reference_separation_m
         for name, value in numeric.items():
@@ -182,6 +186,9 @@ class OverheadObjectCounter:
                 raise ValueError(f'{name} must be a finite number') from exc
             if not np.isfinite(numeric[name]) or numeric[name] < 0:
                 raise ValueError(f'{name} must be finite and nonnegative')
+        for key in ('background_match_chroma_tolerance', 'background_match_luma_tolerance'):
+            if numeric[key] <= 0:
+                raise ValueError(f'{key} must be positive')
         if not 0 < numeric['color_tolerance'] <= 128 or numeric['color_margin'] >= numeric['color_tolerance']:
             raise ValueError('color_tolerance must be in (0,128] and color_margin less than it')
         if not 0 < numeric['min_depth_support_fraction'] <= 1:
@@ -235,13 +242,14 @@ class OverheadObjectCounter:
                     depth_scale_m=None, registered_to_depth=False, arm_mask=None, exclusion_mask=None,
                     work_roi=None, color_valid_mask=None, depth_valid_mask=None,
                     background_depth_valid_mask=None, observed_mask=None, uncertain_mask=None,
-                    cleanup_changed_mask=None, invalid_values=(), diagnostics=False):
+                    cleanup_changed_mask=None, invalid_values=(), diagnostics=False,
+                    background_color=None, background_color_valid_mask=None, background_check_mask=None):
         """Group an existing bool mask without running background segmentation.
 
         Color is uint8 HxWx3; every mask/depth shares that grid. Optional current
         and empty depth must be supplied together, with explicit scale and
         registered_to_depth=True. Their signed camera-Z support uses the configured
-        background segmenter's depth threshold/margin ONLY, never its segmentation.
+        background segmenter's depth threshold/margin, never its segmentation.
         Without depth, color hypotheses are returned but count is always None.
 
         observed_mask=False means unknown coverage, not known background. Carry
@@ -249,6 +257,14 @@ class OverheadObjectCounter:
         removals) in cleanup_changed_mask. These masks block an accepted count in
         the searched domain and never create depth evidence. Mask selection and
         completeness remain caller assumptions; no RGB background is required.
+
+        Optional background_color is an aligned empty-scene uint8 image. Clear
+        encoded-Lab matches are removed only with near-table measured depth.
+        Match tolerances are independent constructor parameters; reference check,
+        compensation and score margin use background_segmenter settings. Missing
+        depth, inferred pixels and strong depth foreground are never removed.
+        This can miss thin same-color objects; inspect background_removed_mask
+        with diagnostics=True. It is not a semantic background classifier.
         """
         if type(diagnostics) is not bool or type(registered_to_depth) is not bool:
             raise ValueError('diagnostics and registered_to_depth must be bool')
@@ -299,14 +315,38 @@ class OverheadObjectCounter:
         depth_foreground = valid & (delta > threshold) & ~input_uncertain & ~changed
         conflict = candidate & valid & (delta < -threshold)
         uncertain = input_uncertain | changed | ~available | ~usable_color | ~valid | near_threshold | conflict
+        reference_status = 'not_used_external_mask'
+        reference_summary = None
+        match_masks = None
+        if background_color is None:
+            if background_color_valid_mask is not None or background_check_mask is not None:
+                raise ValueError('background color validity/check masks require background_color')
+        else:
+            from ._object_count_background import filter_mask_background
+            candidate, match_masks, reference_summary = filter_mask_background(
+                rgb, background_color, color_order, candidate,
+                usable_color & mask(background_color_valid_mask, 'background_color_valid_mask', True),
+                background_check_mask, valid, delta, input_uncertain | changed,
+                bp, self.parameters)
+            reference_status = reference_summary['status']
+            uncertain |= match_masks['background_match_ambiguous_mask']
         evidence = _CountEvidence(
             candidate, usable_color, valid, depth_foreground, near_threshold,
             uncertain, conflict, np.zeros(shape, bool), np.zeros(shape, bool), delta,
-            'not_used_external_mask',
+            reference_status,
             dict(input_mode='external_mask', background_segmenter=None,
                  depth_evidence='measured_current_empty_pair' if has_depth else 'unavailable',
                  depth_support_parameters=dict(depth_threshold_m=threshold, depth_margin_m=margin)),
-            input_uncertain_mask=input_uncertain, cleanup_changed_mask=changed)
+            summary=reference_summary, input_uncertain_mask=input_uncertain,
+            cleanup_changed_mask=changed, background_match_masks=match_masks)
+        if match_masks is not None:
+            evidence.parameters['background_mask_filter'] = dict(
+                enabled=True, chroma_tolerance=self.parameters['background_match_chroma_tolerance'],
+                luma_tolerance=self.parameters['background_match_luma_tolerance'],
+                score_margin=bp['background_score_margin'],
+                reference_status=reference_status,
+                compensation_applied=reference_summary['compensation_applied'],
+                encoded_lab_offset=reference_summary['encoded_lab_offset'])
         return self._count(color, evidence, color_order=color_order, depth_scale_m=depth_scale_m,
                            arm_mask=arm_mask, exclusion_mask=exclusion_mask, work_roi=roi,
                            diagnostics=diagnostics)
@@ -473,6 +513,10 @@ class OverheadObjectCounter:
             reasons.append('cleanup_changed_pixels_are_inferred_not_observed')
         if evidence.parameters.get('depth_evidence') == 'unavailable':
             reasons.append('external_mask_has_no_depth_evidence')
+        if evidence.background_match_masks is not None:
+            removed = evidence.background_match_masks['background_removed_mask'] & domain
+            if removed.any() and not candidate.any():
+                reasons.append('background_matching_mask_may_include_thin_objects')
         reasons = list(dict.fromkeys(reasons))
         uncertain = (evidence.uncertain_mask | unresolved | appearance_ambiguous | rejected | missing) & domain
         count = None if reasons or rejected_large else len(groups)
@@ -505,6 +549,10 @@ class OverheadObjectCounter:
         if evidence.parameters['input_mode'] == 'external_mask':
             metrics.update(input_uncertain_pixels=int(input_uncertain.sum()),
                            cleanup_changed_pixels=int(cleanup_changed.sum()))
+        if evidence.background_match_masks is not None:
+            metrics.update({key.replace('_mask', '_pixels'): int((value & domain).sum())
+                            for key, value in evidence.background_match_masks.items()})
+            warnings.append('background_similarity_can_hide_thin_same_color_objects_inspect_removed_pixels')
         debug = {}
         if diagnostics:
             debug = dict(depth_difference_m=delta.copy(), chromaticity=features_image,
@@ -518,6 +566,8 @@ class OverheadObjectCounter:
             if evidence.parameters['input_mode'] == 'external_mask':
                 debug.update(input_uncertain_mask=input_uncertain.copy(),
                              cleanup_changed_mask=cleanup_changed.copy())
+        if diagnostics and evidence.background_match_masks is not None:
+            debug.update({key: value & domain for key, value in evidence.background_match_masks.items()})
         parameters = dict(p, **evidence.parameters,
                           color_order=color_order, depth_scale_m=None if depth_scale_m is None else float(depth_scale_m),
                           registration='caller_declared' if depth_scale_m is not None else 'shared_color_mask_grid',

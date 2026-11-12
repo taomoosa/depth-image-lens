@@ -456,3 +456,59 @@ temporal evidence, or different sensing is needed rather than aggressive filters
 The regression suite checks these contracts and includes explicit non-identifiable
 counterexamples. It does **not** measure accuracy on actual deformable-object
 captures or establish deployment readiness.
+
+## Empty color reference with an external mask
+
+`detect_mask` optionally accepts `background_color`, an empty-table uint8 image
+on the exact same grid/crop as `color`, and `background_color_valid_mask` and
+`background_check_mask`. It does not rerun segmentation or expand the input mask.
+
+```python
+counter = OverheadObjectCounter(
+    background_match_chroma_tolerance=8.0,
+    background_match_luma_tolerance=12.0,
+)
+result = counter.detect_mask(
+    color, repaired_mask, color_order="RGB",
+    background_color=empty_color,
+    depth=depth, background_depth=empty_depth,
+    depth_scale_m=0.001, registered_to_depth=True,
+    diagnostics=True,
+)
+removed_table_candidates = result.diagnostics["background_removed_mask"]
+```
+
+The two tolerances are OpenCV encoded 8-bit Lab distances, not RGB distances or
+standardized Delta E. They are independent of `color_tolerance`, which controls
+object grouping, and of the segmenter's foreground color tolerances. A clear
+match satisfies the elliptical chroma/luma distance test outside its uncertainty
+margin. It is removed only where measured `abs(empty_depth-current_depth)` is
+less than `depth_threshold_m-depth_margin_m`. The configured
+`background_segmenter` supplies these depth thresholds, `background_score_margin`,
+and reference-check/compensation settings. Explicit uncertainty and cleanup
+changes are never removed by this filter.
+
+Start with 8/12. If modest illumination/color drift leaves table pixels, try
+12/18 and inspect removed pixels and actual object retention, not only the count.
+Larger tolerances can erase thin objects similar to the table. Strong positive
+depth preserves a same-color object; missing depth does not justify removal.
+RGB+mask+empty RGB without depth therefore still returns hypotheses, not a
+certified count, and this conservative filter does not remove table pixels.
+A rejected reference disables removal. Optional check pixels must be known
+unchanged table, with at least 25 valid samples. No alignment is estimated.
+
+Diagnostics include `background_removed_mask`, `background_matching_mask`, and
+`background_match_ambiguous_mask`; matching color supported by strong depth can
+remain in the last mask without vetoing the depth-supported count. Corresponding
+`*_pixels` metrics are available without diagnostics. Reference checks and
+settings are recorded in `diagnostics["background"]` when requested.
+
+Synthetic checks retain a contrasting raised object while removing a padded
+table rim, including RGB/BGR, crop, invalid-depth and reference-rejection cases.
+Random false-positive table depth plus large color variation can leave false
+groups. Thin table-colored objects are fundamentally ambiguous: if the entire
+candidate mask is removed, `count=None` flags this; partial removal of a hidden
+same-color thin object cannot be detected reliably. All removed pixels should
+be inspected when tuning. This is not validated real-image accuracy or semantic
+object/background recognition. Omitting `background_color` preserves the prior
+external-mask path.
