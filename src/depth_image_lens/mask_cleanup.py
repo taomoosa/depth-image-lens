@@ -85,6 +85,9 @@ class MaskCleanupResult:
     parameters: dict
     metrics: dict
     warnings: list
+    # Optional trailing field preserves construction with the original arguments.
+    # cleanup_mask always returns a boolean array here, even when closing is off.
+    closed_gap_mask: np.ndarray = field(default=None, repr=False)
 
     @property
     def changed_mask(self):
@@ -97,10 +100,18 @@ class MaskCleanupResult:
 
 
 def cleanup_mask(object_mask, *, max_hole_area=0, smoothing_radius_px=0,
+                 closing_radius_px=0, max_gap_area=0,
                  observed_mask=None, protected_mask=None):
     """Fill small enclosed holes and/or smooth the exterior of a bool HxW mask.
 
-    Both operations default to off. Hole area is in pixels, inclusive of the
+    All operations default to off. Gap closing requires both closing_radius_px
+    (0..5) and max_gap_area (pixels) to be positive. It proposes square binary
+    closing additions, then accepts whole candidate components within the area
+    limit only if they touch one existing foreground component and avoid the
+    frame/unknown/protected 2*radius halo and original enclosed-hole rim.
+    This can seal a real open notch; it is an explicitly geometric hypothesis.
+
+    Hole filling and smoothing default to off. Hole area is in pixels, inclusive of the
     limit; smoothing is one square-window majority pass, radius 0..5 pixels.
     Input arrays are never modified. Unknown (unobserved) and protected pixels
     retain their input values, including foreground values. Pass deferred,
@@ -111,7 +122,9 @@ def cleanup_mask(object_mask, *, max_hole_area=0, smoothing_radius_px=0,
     Filling cannot join separate foreground components. Smoothing preserves
     enclosed holes and their rim, freezes a radius-wide frame/unknown/protected
     halo, and applies sequential topology-guarded changes in row-major order.
-    It does not erase, split or merge connected components or close open gaps.
+    Smoothing does not erase, split or merge components or close open gaps.
+    Optional gap closing can change background topology but never joins separate
+    foreground components. Newly closed pockets are not hole-filled in this call.
     Real holes, corners and thin appendages cannot be identified from a mask:
     small real holes may be filled and optional smoothing can round/shorten
     real details. No depth values or source evidence are changed.
@@ -123,6 +136,10 @@ def cleanup_mask(object_mask, *, max_hole_area=0, smoothing_radius_px=0,
         raise ValueError('max_hole_area must be a nonnegative integer')
     if type(smoothing_radius_px) is not int or not 0 <= smoothing_radius_px <= 5:
         raise ValueError('smoothing_radius_px must be an integer in 0..5')
+    if type(closing_radius_px) is not int or not 0 <= closing_radius_px <= 5:
+        raise ValueError('closing_radius_px must be an integer in 0..5')
+    if type(max_gap_area) is not int or max_gap_area < 0:
+        raise ValueError('max_gap_area must be a nonnegative integer')
     shape = source.shape
     original = source.copy()
     cleaned = source.copy()
@@ -136,7 +153,7 @@ def cleanup_mask(object_mask, *, max_hole_area=0, smoothing_radius_px=0,
     hole_count = None
     filled_count = topology_rejected = proposed_count = 0
 
-    if max_hole_area or smoothing_radius_px:
+    if max_hole_area or smoothing_radius_px or (closing_radius_px and max_gap_area):
         background_labels, areas = _components8(~original)
         exterior = np.zeros(len(areas), bool)
         exterior[0] = True
@@ -172,11 +189,49 @@ def cleanup_mask(object_mask, *, max_hole_area=0, smoothing_radius_px=0,
             filled_count = int(fill_labels.sum())
             cleaned |= filled
 
+    closed_gap = np.zeros(shape, bool)
+    gap_candidates = gap_rejected = gap_count = 0
+    if closing_radius_px and max_gap_area:
+        radius = closing_radius_px
+        size = 2 * radius + 1
+        # Closing is only a proposal. Do not clip unsafe pieces off a candidate:
+        # reject the complete addition component instead.
+        dilated = _box_sum(cleaned, radius) > 0
+        closed = _box_sum(dilated, radius) == size * size
+        proposal = closed & ~cleaned
+        gap_labels, gap_areas = _components8(proposal)
+        gap_candidates = len(gap_areas) - 1
+        unsafe = (_box_sum(blocked, 2 * radius) > 0) | (_box_sum(enclosed, 1) > 0)
+        halo = 2 * radius
+        unsafe[:halo] = unsafe[-halo:] = True
+        unsafe[:, :halo] = unsafe[:, -halo:] = True
+        unsafe_counts = np.bincount(gap_labels[unsafe], minlength=len(gap_areas))
+        candidates = (gap_areas <= max_gap_area) & (unsafe_counts == 0)
+        candidates[0] = False
+        fg_labels, _ = _components8(cleaned)
+        sentinel = int(fg_labels.max()) + 1
+        low = np.full(len(gap_areas), sentinel, np.int32)
+        high = np.zeros(len(gap_areas), np.int32)
+        height, width = shape
+        for dy, dx in _NEIGHBORS:
+            y0, y1 = max(0, -dy), min(height, height - dy)
+            x0, x1 = max(0, -dx), min(width, width - dx)
+            bg = gap_labels[y0:y1, x0:x1]
+            fg = fg_labels[y0 + dy:y1 + dy, x0 + dx:x1 + dx]
+            selected = candidates[bg] & (fg > 0)
+            np.minimum.at(low, bg[selected], fg[selected])
+            np.maximum.at(high, bg[selected], fg[selected])
+        accepted = candidates & (low == high) & (high > 0)
+        closed_gap = accepted[gap_labels]
+        gap_count = int(accepted.sum())
+        gap_rejected = gap_candidates - gap_count
+        cleaned |= closed_gap
+
     before_smoothing = cleaned.copy()
     radius = smoothing_radius_px
     if radius:
         safe = _box_sum(blocked, radius) == 0
-        safe &= _box_sum(enclosed, 1) == 0
+        safe &= _box_sum(enclosed | closed_gap, 1) == 0
         # No padding value is evidence beyond the image or observed domain.
         safe[:radius] = safe[-radius:] = False
         safe[:, :radius] = safe[:, -radius:] = False
@@ -202,20 +257,26 @@ def cleanup_mask(object_mask, *, max_hole_area=0, smoothing_radius_px=0,
                    changed_pixels=int((added | removed).sum()),
                    enclosed_holes=hole_count, filled_holes=filled_count,
                    filled_hole_pixels=int(filled.sum()),
+                   closed_gap_pixels=int(closed_gap.sum()), closed_gaps=gap_count,
+                   closing_candidate_components=gap_candidates,
+                   closing_rejected_components=gap_rejected,
                    smoothing_added_pixels=int(smoothed_added.sum()),
                    smoothing_removed_pixels=int(smoothed_removed.sum()),
                    smoothing_proposed_pixels=proposed_count,
                    smoothing_topology_rejected_pixels=topology_rejected,
                    protected_pixels=int(protected.sum()), unobserved_pixels=int((~observed).sum()))
     parameters = dict(max_hole_area=max_hole_area, smoothing_radius_px=radius,
+                      closing_radius_px=closing_radius_px, max_gap_area=max_gap_area,
                       connectivity=8, smoothing_passes=1 if radius else 0,
                       smoothing_order='row_major_sequential_topology_guard')
     warnings = ['geometric_corrections_are_not_observed_color_or_depth_evidence',
                 'small_real_holes_and_segmentation_holes_are_indistinguishable',
                 'smoothing_can_round_corners_and_shorten_thin_appendages',
-                'open_gaps_and_missing_objects_are_not_reconstructed',
+                ('closing_can_seal_real_notches_and_create_enclosed_pockets'
+                 if closing_radius_px and max_gap_area else
+                 'open_gaps_and_missing_objects_are_not_reconstructed'),
                 'pixel_settings_depend_on_image_resolution',
                 'real_image_accuracy_unvalidated']
     return MaskCleanupResult(original, cleaned, observed, protected, added, removed,
                              filled, smoothed_added, smoothed_removed,
-                             parameters, metrics, warnings)
+                             parameters, metrics, warnings, closed_gap_mask=closed_gap)

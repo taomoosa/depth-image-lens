@@ -1,8 +1,8 @@
 # Optional mask cleanup
 
 `cleanup_mask()` is a separate, NumPy-only postprocessing step for an existing
-boolean segmentation mask. It can fill small enclosed holes and smooth a jagged
-exterior without changing the color or depth segmentation thresholds. Neither
+boolean segmentation mask. It can fill small enclosed holes, optionally close
+narrow open notches, and smooth a jagged exterior without changing the color or depth segmentation thresholds. No
 operation is enabled by default, and no existing detector calls it implicitly.
 
 Start with **hole filling alone**. Enable smoothing only if its changes are
@@ -55,6 +55,8 @@ mutable NumPy arrays, not a read-only security boundary.
 |---|---:|---|
 | `max_hole_area` | `0` | Nonnegative Python integer. Zero disables filling. Fill only enclosed background components with pixel area **at most** this limit. |
 | `smoothing_radius_px` | `0` | Python integer `0..5`. Zero disables smoothing. Radius 1 uses a 3×3 square majority window; radius 2 uses 5×5. One pass only. |
+| `closing_radius_px` | `0` | Python integer `0..5`. Square closing radius: 1 proposes a 3×3 closing. Requires positive `max_gap_area`. |
+| `max_gap_area` | `0` | Nonnegative Python integer. Inclusive cap on each connected **addition proposal**, not on the entire exterior background or a newly enclosed pocket. Zero disables closing. |
 | `observed_mask` | All true | False means unavailable, not confidently background. Preserve its input values and do not use its neighborhood to drive corrections. |
 | `protected_mask` | All false | Preserve both foreground and background values. Use for explicit exclusions, unresolved decisions, or known features that must stay unchanged. |
 
@@ -76,9 +78,68 @@ small starting examples, not validated camera defaults.
 A cropped object can still have a fully enclosed, observed hole filled away from
 the frame. A notch or channel open to the exterior is not a hole and is not filled.
 
+### Narrow gaps connected to the exterior
+
+An exterior-connected slit is not an enclosed hole. Increasing `max_hole_area`
+cannot fill it, and topology-preserving smoothing deliberately keeps an open
+route. Use the separate, disabled-by-default closing operation when a small
+open slit is known to be segmentation damage:
+
+```python
+repair = cleanup_mask(
+    segmented.object_mask,
+    closing_radius_px=1,
+    max_gap_area=64,
+    observed_mask=segmented.outline_observed_mask,
+    protected_mask=segmented.suppressed_mask | segmented.deferred_mask,
+)
+mask = repair.object_mask
+uncertain = segmented.uncertain_mask | repair.changed_mask
+# repair.closed_gap_mask identifies the pixels added by gap closing.
+```
+
+Start with radius 1 and an area cap appropriate to the defect. For a straight,
+axis-aligned slit, radius 1 can fill widths 1–2 pixels, radius 2 widths 3–4, and
+radius 3 widths 5–6; these are synthetic geometry examples, not universal width
+guarantees for diagonal or curved shapes. A 2×23 slit needs `max_gap_area >= 46`.
+Increase the radius only if the missing width requires it; raise the area cap
+only to cover the intended missing area. Large radii can erase real concavities.
+
+Processing order is enclosed-hole filling, gap closing, then smoothing:
+
+1. Compute square binary closing (dilation then erosion), but propose additions
+   only. Closing never removes supplied foreground.
+2. Label proposed additions with 8-connectivity. Reject an entire addition
+   component if it exceeds the inclusive area cap, touches more than one current
+   foreground component, or lacks a foreground neighbor.
+3. Reject the complete proposal if it intersects a `2 * closing_radius_px` frame
+   band or unknown/protected halo. This covers the full closing footprint; one
+   blocked pixel may prevent repair of the whole slit. Do not clip a candidate
+   into a misleading partial repair.
+4. Preserve original enclosed holes and their one-pixel rim. Closing is separate
+   from `max_hole_area` and does not fill retained enclosed holes.
+5. Preserve accepted gap additions and their one-pixel rim during smoothing.
+
+Distinct foreground components cannot be joined. **Background topology can
+change intentionally**: a narrow mouth into a large chamber may be sealed while
+leaving the chamber as a new enclosed hole. `max_gap_area` bounds added pixels,
+not the chamber's area. Newly enclosed pockets are not filled in this call;
+repeated cleanup calls could fill them later, so apply once to the original mask.
+
+A real narrow notch is indistinguishable from missing segmentation. Closing may
+incorrectly seal a real opening between two parts of the same object. Protect
+known openings explicitly. Cropped gaps and gaps over unknown or excluded data
+are deliberately left unchanged. Omitting protection is not evidence that those
+pixels are observed; it can produce invented geometry. No depth is reconstructed.
+
+`examples/example_mask_cleanup_gaps.py` demonstrates nine cases. Its 46-pixel
+slit is completely restored with radius 1 / area 64, unchanged by hole filling
+alone, rejected at area 32, and rejected when unknown/protected. A real slit of
+the same shape produces 46 incorrect additions. Real-image accuracy is untested.
+
 ### Exterior smoothing
 
-After optional filling, propose one square-window majority pass. Freeze all
+After optional filling and closing, propose one square-window majority pass. Freeze all
 original enclosed holes and their one-pixel foreground rim, including holes just
 filled. Also freeze a radius-wide image-frame band and every pixel whose window
 intersects unknown/protected data.
@@ -87,7 +148,8 @@ Apply proposed changes sequentially in row-major order. A local 3×3 connectivit
 check rejects a change that could create, erase, split or join an 8-connected
 foreground or background component. This keeps neighboring mask components
 separate, preserves thin connecting necks, and leaves an 8-connected route through
-open gaps. It is deliberately more conservative than ordinary median filtering,
+open gaps unless the earlier closing operation was explicitly enabled. Smoothing
+is deliberately more conservative than ordinary median filtering,
 opening or closing.
 
 These guarantees refer to **8-connected foreground and 8-connected background**,
@@ -107,14 +169,16 @@ masks have many sequential checks; no real-time performance guarantee is made.
 - `added_mask`, `removed_mask`, and property `changed_mask`: exact differences
   against the original, including removals that might otherwise be overlooked.
 - `filled_hole_mask`: additions caused by filling.
+- `closed_gap_mask`: additions caused by bounded open-gap closing (always a bool
+  array from `cleanup_mask`, including when disabled).
 - `smoothed_added_mask`, `smoothed_removed_mask`: changes caused by smoothing.
 - `observed_mask`, `protected_mask`: unchanged copies of the caller's masks.
 - `parameters`, `metrics`, `warnings`, and JSON-compatible `to_dict()`.
 
-`added_mask == filled_hole_mask | smoothed_added_mask` and
-`removed_mask == smoothed_removed_mask`. Filled pixels cannot subsequently be
+`added_mask == filled_hole_mask | closed_gap_mask | smoothed_added_mask` and
+`removed_mask == smoothed_removed_mask`. Filled and gap-closed pixels cannot subsequently be
 removed by smoothing. Metrics count proposed smoothing changes and topology
-rejections. `enclosed_holes` is `None` when both operations are disabled, because
+rejections. `enclosed_holes` is `None` when all operations are disabled, because
 no hole analysis was run.
 
 Corrections remain **inferred geometry**, even if the original pixel had a valid
@@ -168,6 +232,7 @@ Run a complete synthetic RGB-D → cleanup → outline example and comparisons:
 
 ```bash
 python examples/example_mask_cleanup.py
+python examples/example_mask_cleanup_gaps.py
 python -m unittest tests.test_mask_cleanup -v
 python -m unittest discover -s tests -t . -v
 ```

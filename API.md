@@ -271,10 +271,12 @@ Color evidence and relative relief do not establish wrinkles, layers or graspabi
 ## Optional mask cleanup
 
 `cleanup_mask(object_mask, *, max_hole_area=0, smoothing_radius_px=0,
-observed_mask=None, protected_mask=None)` returns `MaskCleanupResult`. Both
-operations default to off; all existing detector behavior is unchanged. The
+closing_radius_px=0, max_gap_area=0, observed_mask=None, protected_mask=None)`
+returns `MaskCleanupResult`. All operations default to off; all existing detector behavior is unchanged. The
 NumPy-only helper preserves the original and reports exact added/removed pixels,
-small-hole fills and exterior-smoothing changes separately. Unknown and protected
+small-hole fills, `closed_gap_mask` additions and exterior-smoothing changes separately.
+Open-gap closing requires both a positive radius and a positive addition-area cap;
+it can seal real notches but does not merge separate foreground components. Unknown and protected
 regions remain unchanged. Corrections are inferred geometry, not new sensor
 evidence. See [mask cleanup](MASK_CLEANUP.md) for input contracts, topology guards,
 uncertainty handling, failure cases, and RGB-D/outline integration.
