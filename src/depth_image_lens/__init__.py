@@ -77,3 +77,7 @@ __all__ += ["cleanup_mask", "MaskCleanupResult"]
 from .object_count import OverheadObjectCounter, ObjectCountResult
 
 __all__ += ["OverheadObjectCounter", "ObjectCountResult"]
+
+from .top_entry_bridge import TopEntryBridgeDetector, TopEntryBridgeResult
+
+__all__ += ["TopEntryBridgeDetector", "TopEntryBridgeResult"]
