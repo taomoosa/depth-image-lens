@@ -8,7 +8,7 @@ from .geometry import bool_mask
 from ._rgbd_fusion import (evidence_fusion, color_seeded_fusion, DECISION_REASONS,
                            SEEDED_DECISION_REASONS, depth_anchored_fusion, ANCHORED_DECISION_REASONS)
 
-from ._rgbd_color_model import color_model_fusion, MODEL_DECISION_REASONS
+from ._rgbd_color_model import color_model_fusion, MODEL_DECISION_REASONS, MODEL_REJECTION_FLAGS, render_model_rejection_maps
 from ._rgbd_color_local import color_local_fusion, LOCAL_DECISION_REASONS
 from ._rgbd_color_region import color_region_fusion, REGION_DECISION_REASONS
 from ._rgbd_color_supported import color_supported_fusion, SUPPORTED_DECISION_REASONS
@@ -50,8 +50,10 @@ class RGBDBackgroundResult(DebugResultMixin):
         return {k: v for k, v in vars(self).items()
                 if not isinstance(v, np.ndarray) and k != 'diagnostics'}
 
-    def render_debug(self, color=None, *, color_order='RGB', **options):
+    def render_debug(self, color=None, *, color_order='RGB', model_diagnostic_id=None, **options):
         """Common mask panels plus fixed-scale evidence maps when recorded."""
+        if model_diagnostic_id is not None and 'model_all_rejection_flags' not in self.diagnostics:
+            raise ValueError('model_diagnostic_id requires color_model diagnostics=True')
         base = super().render_debug(color, color_order=color_order, **options)
         if not self.diagnostics:
             return base
@@ -139,6 +141,24 @@ class RGBDBackgroundResult(DebugResultMixin):
                     ink = (210, 210, 210)
                 cv.putText(panel, label, (width + 8, 24 + 22*i), cv.FONT_HERSHEY_SIMPLEX,.4,tuple(map(int,ink)),1)
             output = np.concatenate((output, panel), axis=0)
+        if self.parameters['fusion_mode'] == 'color_model' and 'model_all_rejection_flags' in self.diagnostics:
+            flags = self.diagnostics['model_all_rejection_flags']
+            unselected = ~self.object_mask
+            panel = np.zeros((300, output.shape[1], 3), np.uint8)
+            lines = ['Model rejection tests: unselected pixels failing ANY evaluable model',
+                     'Overlapping counts; different models can disagree. Inspect per-model flags.']
+            for bit, reason in MODEL_REJECTION_FLAGS.items():
+                failed = np.zeros(self.object_mask.shape, bool)
+                for one_model in flags:
+                    failed |= (one_model & bit) != 0
+                count = int((failed & unselected).sum())
+                lines.append(f'{bit}: {reason}: {count}')
+            lines.append('No evaluable model: ' + str(int(self.diagnostics['model_no_evaluable_model_mask'].sum())))
+            for i, line in enumerate(lines):
+                cv.putText(panel, line, (8, 18 + 19*i), cv.FONT_HERSHEY_SIMPLEX, .38, (220,220,220), 1)
+            spatial = render_model_rejection_maps(self.diagnostics, self.object_mask,
+                output.shape[1], model_id=model_diagnostic_id, color_order=color_order)
+            output = np.concatenate((output, panel, spatial), axis=0)
         return output
 
 
@@ -445,7 +465,7 @@ class RGBDBackgroundSegmenter:
         elif p['fusion_mode'] == 'color_model':
             obj, suppressed, deferred, fusion_debug = color_model_fusion(
                 delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
-                lab, current_color_valid & roi, color_debug, valid, roi, p)
+                lab, current_color_valid & roi, color_debug, valid, roi, p, diagnostics=diagnostics)
             observed = valid.copy()
             uncertain |= fusion_debug['unknown_mask']
             fusion_debug['unknown_mask'] = uncertain.copy()
@@ -531,6 +551,7 @@ class RGBDBackgroundSegmenter:
                                             for code, reason in reasons.items()})
         if p['fusion_mode'] == 'color_model':
             stages['fusion']['models'] = fusion_debug['model_statistics']
+            stages['fusion']['model_rejection_flags'] = {str(k): v for k, v in MODEL_REJECTION_FLAGS.items()}
             metrics['model_budget_exceeded'] = fusion_debug['model_budget_exceeded']
             stages['fusion']['warnings'] += [
                 'models_are_fixed_depth_seed_colors_not_semantic_material_models',

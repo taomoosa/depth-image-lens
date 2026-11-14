@@ -153,3 +153,125 @@ On the test machine (Intel Core i7-14700), 640x480 diagnostics-enabled calls aft
 one warm-up had median times over three runs of 0.71 s (`color_local`) and 0.76 s
 (`color_model`), excluding capture/rendering. Cost grows with local support
 radius and model count; remeasure on the target workload.
+
+## Diagnosing rejected pixels
+
+Run `PYTHONPATH=src python examples/example_rgbd_color_model_diagnostics.py`.
+The `explain_pixel(result, y, x)` helper reports each evaluable model separately.
+Enable `diagnostics=True`; these extra arrays are not computed otherwise and do
+not change segmentation. The fusion image retains its existing colors. Its new
+text panel counts overlapping failed tests over unselected pixels for **any**
+evaluable model, not a unique cause or a vote. One model can reject a pixel that
+another accepts. Use the per-model arrays for attribution.
+
+Red decision 4 means raw depth is foreground but the pixel was not selected;
+it overwrites decision 3, so it does not identify the actual rejecting test.
+Neither red nor cyan means an enclosed hole. Check the final `object_mask` and
+connectivity before applying geometric repair.
+
+New diagnostics have shape `(number_of_evaluable_models, H, W)` and matching
+`model_diagnostic_ids`. IDs reference `stages['fusion']['models']`:
+
+- `model_all_color_distances`: nearest palette distance for that model at every
+  usable color pixel, including rejected pixels. NaN means unusable color,
+  not zero distance. Existing `model_color_distance` remains selected-only.
+- `model_all_source_distances_px`: exact obstacle-free 8-neighbor (Chebyshev)
+  distance to that model's color-qualified source. NaN means no source. This is
+  a lower bound on path length, **not** the color-constrained geodesic distance.
+- `model_all_reachable_masks`: connected to a source through the complete valid
+  color domain, ignoring the step limit. False can also mean color/domain failure.
+- `model_all_selected_masks`: that model's selection before global area filtering.
+  Always consult final `object_mask` / decision 6 for area-filtered pixels.
+- `model_all_rejection_flags`: independent overlapping bits listed in
+  `stages['fusion']['model_rejection_flags']`. Bits 1/2/4/8/16/32 indicate ROI,
+  color usability, depth validity, relaxed color candidate, farther and upper
+  exclusions. Bits 64/128 are model distance and same-position background
+  competition failures. Bit 256 means this model has no qualified source.
+  Bit 512 means color-qualified but disconnected; bit 1024 means connected but
+  beyond the actual bounded growth. These last two require a source and valid
+  color/domain, and are mutually exclusive. Color failures are evaluated only
+  where color is usable. Multiple input and color failures may coexist.
+- `model_no_evaluable_model_mask`: ROI pixels when no palette can be evaluated.
+  Empty stacks have shape `(0,H,W)`, not an invented infinite distance. Inspect
+  model records for insufficient training or missing palette, existing
+  `model_unavailable_mask` for affected seed regions, and
+  `model_budget_exceeded` for omitted models. A distant evaluable model does not
+  erase an unavailable local model's status.
+
+`model_background_distance` is the existing same-position full-Lab difference;
+ignore it on color-unusable pixels. Compare a model's color distance plus
+`model_background_margin` against this value. Do not combine the smallest color
+distance from one model with reachability from another. No model is inferred
+for unsupported training regions. These are algorithmic reasons, not semantic
+proof that a pixel is shadow or object.
+
+Diagnostic memory grows with model count (approximately 12 bytes per pixel per
+model for the retained new stacks, plus temporary allocations). At 640x480 with
+32 evaluable models the stacks alone use about 118 MB. Disable diagnostics in
+production when they are unnecessary. The connectivity pass adds diagnostic-only
+runtime; it does not change the existing growth radius or mask.
+
+### Spatial rejection tiles
+
+`result.render_debug(color, color_order='RGB')` now appends one spatial tile per
+independent test plus a no-evaluable-model tile. Orange marks **unselected**
+pixels failing that test, gray is the selected object for context, black is
+neither. A pixel can be orange in several tiles: there is no priority coloring
+that hides overlapping reasons. All original fusion panels remain present.
+
+By default the tile marks failure for **ANY evaluable model**. It is not a claim
+that every model failed that same test; one model can fail color while another
+fails connectivity. To inspect a particular model without that aggregation:
+
+```python
+model_id = int(result.diagnostics['model_diagnostic_ids'][0])
+image = result.render_debug(color, color_order='RGB', model_diagnostic_id=model_id)
+```
+
+Check for an empty ID list first. IDs are region identifiers, not array indices.
+Unknown IDs, noninteger IDs, and requesting a model without detailed diagnostics
+raise `ValueError`. The pre-existing count panel still reports ANY-model counts;
+the spatial panel header identifies its own scope. Model records and
+`explain_pixel` remain the authoritative per-pixel details. No-source and
+non-candidate tests can mark broad regions; they are not evidence of an object.
+For no evaluable models, all per-model test tiles are empty and the dedicated
+ROI tile is orange. Per-model tiles deliberately omit pixels already accepted by
+another model; use the numeric stacks to inspect those disagreements.
+
+Run the example with `--output /tmp/color_model_debug.png`, optionally adding
+`--model-id 1`. It writes only when an output path is provided. Spatial tiles use
+nearest-neighbor scaling; zoom or inspect numeric masks to check single pixels.
+Rendering iterates models per test rather than allocating another full stack;
+it needs image-sized scratch buffers and a taller output canvas. A rendered
+image is not an additional segmentation result and never alters the masks.
+
+### How background difference affects selection
+
+There is no weighted sum of depth, object color, and background color, and no
+independent background weight parameter. Selection must pass separate gates.
+With corrected same-position background Lab difference `(dL, da, db)`:
+
+```
+dC = sqrt(da**2 + db**2)
+S = (dC / background_chroma_tolerance)**2 + (abs(dL) / background_luma_tolerance)**2
+relaxed_color_candidate = S > local_color_relaxation_ratio**2
+
+d_background = sqrt(dC**2 + dL**2)
+d_model = minimum Euclidean Lab distance to this model's palette
+color_ok = (d_model <= model_color_tolerance) AND
+           (d_model + model_background_margin < d_background)
+```
+
+Candidate, valid input, source connectivity and growth budget must also pass.
+Large background difference cannot compensate for an incompatible object color
+or disconnected source. The normalized candidate score uses defaults 20 for
+chroma tolerance, 60 for luminance tolerance and 0.2 for relaxation. Lowering a
+tolerance raises sensitivity to that difference, effectively changing its
+inverse-square contribution to this **first** gate. The subsequent full-Lab
+background competition does not use those normalization tolerances. Defaults
+are 18 for object model tolerance and 3 for the background margin. Reducing the
+margin relaxes how much closer the pixel must be to the object model than to
+its background, potentially admitting shadows. `background_score_margin` is
+uncertainty bookkeeping, not a background competition weight. Distances use
+OpenCV encoded 8-bit Lab, not standardized Delta E; extreme normalized scores
+are saturated internally for numerical safety.

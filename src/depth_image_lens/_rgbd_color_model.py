@@ -1,8 +1,18 @@
 """Fixed seed-region color models with bounded, background-competitive inference."""
+import textwrap
 import numpy as np
 from ._rgbd_color_local import color_local_fusion
 from ._rgbd_fusion import _neighbors8
 from .debug import _opencv
+
+MODEL_REJECTION_FLAGS = {
+    1: 'outside_roi', 2: 'color_unusable_or_clipped', 4: 'depth_invalid',
+    8: 'not_local_color_candidate', 16: 'farther_than_background',
+    32: 'upper_depth_excluded', 64: 'model_color_distance_exceeded',
+    128: 'background_competition_failed', 256: 'model_has_no_color_qualified_source',
+    512: 'color_qualified_but_disconnected',
+    1024: 'connected_but_growth_budget_exceeded',
+}
 
 MODEL_DECISION_REASONS = {
     0: 'no_color_candidate_or_unavailable',
@@ -42,7 +52,7 @@ def _palette(colors, max_colors, tolerance, min_fraction):
 
 def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
                        color_uncertain, lab, edge_valid, color_debug, valid,
-                       roi, parameters):
+                       roi, parameters, diagnostics=False):
     p = parameters
     _, _, _, local = color_local_fusion(
         delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
@@ -62,6 +72,7 @@ def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
     steps = np.full(valid.shape,-1,np.int8); model_labels=np.zeros(valid.shape,np.int32)
     distances=np.full(valid.shape,np.nan); models=[]
     unavailable = np.isin(labels, order[p['model_max_regions']:])
+    evaluations = []
     usable_model_count = 0
     budget_exceeded = len(order) > p['model_max_regions']
     for label in order[:p['model_max_regions']]:
@@ -93,6 +104,32 @@ def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
             frontier=_neighbors8(frontier) & color_ok & ~connected
             if not frontier.any():break
             connected|=frontier;local_steps[frontier]=step
+        if diagnostics:
+            # Independent tests are retained per model: no winner-takes-all
+            # explanation and no accidental combination of different models.
+            flags = np.zeros(valid.shape, np.uint16)
+            flags[~roi] |= 1
+            flags[~usable] |= 2
+            flags[~valid] |= 4
+            flags[~local['local_candidate_mask']] |= 8
+            flags[farther] |= 16
+            flags[local['local_upper_excluded_mask']] |= 32
+            flags[usable & (distance > p['model_color_tolerance'])] |= 64
+            flags[usable & ~(distance + p['model_background_margin'] < background_distance)] |= 128
+            source_distance = np.full(valid.shape, np.nan, np.float32)
+            reachable = np.zeros(valid.shape, bool)
+            if source.any():
+                # Exact obstacle-free 8-neighbor distance, NOT geodesic distance.
+                source_distance = cv.distanceTransform((~source).astype(np.uint8), cv.DIST_C, 3)
+                _, components = cv.connectedComponents(color_ok.astype(np.uint8), connectivity=8)
+                reachable = np.isin(components, np.unique(components[source])) & color_ok
+                flags[color_ok & ~reachable] |= 512
+                flags[reachable & ~connected] |= 1024
+            else:
+                flags |= 256
+            measured_distance = distance.astype(np.float32)
+            measured_distance[~usable] = np.nan
+            evaluations.append((label, measured_distance, source_distance, flags, reachable, connected.copy()))
         new=connected & ~selected
         model_labels[new]=label;distances[new]=distance[new];steps[new]=local_steps[new]
         selected|=connected;trained|=training & connected;source_mask|=source
@@ -122,4 +159,78 @@ def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
                  inferred_foreground_mask=inferred,confident_foreground_mask=trained & ~color_uncertain,
                  confident_background_mask=local['local_background_mask'] & ~selected,
                  unknown_mask=unknown)
+    if diagnostics:
+        shape = (0,) + valid.shape
+        local['model_diagnostic_ids'] = np.array([e[0] for e in evaluations], np.int32)
+        for name, index, dtype in (
+            ('model_all_color_distances', 1, np.float32),
+            ('model_all_source_distances_px', 2, np.float32),
+            ('model_all_rejection_flags', 3, np.uint16),
+            ('model_all_reachable_masks', 4, bool),
+            ('model_all_selected_masks', 5, bool)):
+            local[name] = (np.stack([e[index] for e in evaluations]) if evaluations
+                           else np.empty(shape, dtype=dtype))
+        local['model_no_evaluable_model_mask'] = roi & (not evaluations)
     return selected,suppressed,deferred,local
+
+
+def render_model_rejection_maps(diagnostics, object_mask, width, *, model_id=None,
+                                color_order='RGB'):
+    """One spatial tile per independent test; never collapse reasons to a winner.
+
+    The default is an existential test across evaluable models, not a global
+    rejection proof. A selected model ID instead shows exactly that model.
+    Temporary memory is O(HW), apart from the output image and existing stacks.
+    """
+    cv = _opencv()
+    flags = diagnostics['model_all_rejection_flags']
+    ids = diagnostics['model_diagnostic_ids']
+    if model_id is not None:
+        if isinstance(model_id, (bool, np.bool_)) or not isinstance(model_id, (int, np.integer)):
+            raise ValueError('model_diagnostic_id must be an evaluable integer model ID')
+        indices = np.flatnonzero(ids == model_id)
+        if not len(indices):
+            raise ValueError('model_diagnostic_id must be an evaluable integer model ID')
+        model_flags = flags[int(indices[0])]
+        scope = f'Model {int(model_id)} only'
+    else:
+        model_flags = None
+        scope = 'ANY evaluable model (not ALL models)'
+    cols = 3
+    tile_width = max(1, width // cols)
+    h,w = object_mask.shape
+    tile_height = min(240, max(2, round(h * tile_width / w)))
+    header = 76
+    label_height = 56
+    rows = (len(MODEL_REJECTION_FLAGS) + 1 + cols - 1) // cols
+    canvas = np.zeros((header + rows * (tile_height + label_height), width, 3),np.uint8)
+    for i,text in enumerate((scope + ': unselected pixels only',
+                             'Orange: test failed. Gray: selected object context.',
+                             'Separate tiles overlap; no priority or unique cause.',
+                             'Inspect per-model flags / example for exact pixel values.')):
+        cv.putText(canvas,text,(8,16+18*i),cv.FONT_HERSHEY_SIMPLEX,.38,(220,220,220),1)
+    unselected = ~object_mask
+    orange = (255,125,35) if color_order == 'RGB' else (35,125,255)
+    tests = list(MODEL_REJECTION_FLAGS.items()) + [(0,'no_evaluable_model_in_ROI')]
+    for index,(bit,reason) in enumerate(tests):
+        if bit == 0:
+            failed = diagnostics['model_no_evaluable_model_mask'] & unselected
+        elif model_flags is not None:
+            failed = ((model_flags & bit) != 0) & unselected
+        else:
+            # Iterate rather than materializing an MxHxW bitwise temporary.
+            failed = np.zeros(object_mask.shape,bool)
+            for one_model in flags:
+                failed |= (one_model & bit) != 0
+            failed &= unselected
+        tile = np.zeros((h,w,3),np.uint8)
+        tile[object_mask] = (70,70,70)
+        tile[failed] = orange
+        tile = cv.resize(tile,(tile_width,tile_height),interpolation=cv.INTER_NEAREST)
+        y = header + (index // cols) * (tile_height + label_height)
+        x = (index % cols) * tile_width
+        for line_index, line in enumerate(textwrap.wrap(f'{bit}: {reason}', width=34)[:2]):
+            cv.putText(canvas,line,(x+4,y+14+14*line_index),cv.FONT_HERSHEY_SIMPLEX,.32,(220,220,220),1)
+        cv.putText(canvas,f'pixels: {int(failed.sum())}',(x+4,y+48),cv.FONT_HERSHEY_SIMPLEX,.34,(220,220,220),1)
+        canvas[y+label_height:y+label_height+tile_height,x:x+tile_width] = tile
+    return canvas
