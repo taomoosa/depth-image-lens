@@ -35,23 +35,25 @@ must already be registered. Color order must be explicit.
    `depth_threshold_m + depth_margin_m` to train a fixed palette. Dense color
    modes are located with coarse bins, and represented by robust medians of
    bounded training clusters. Multiple supported colors are kept separately.
-3. A candidate pixel must be close to a palette color **and** closer to that
-   color than to its own same-position background color, by a margin:
+3. A candidate pixel must be close to a palette color **and** pass the signed
+   background-comparison margin (positive by default):
 
    `distance_to_model <= model_color_tolerance`
 
    `distance_to_model + model_background_margin < distance_to_background`
 
-   Both distances are full OpenCV encoded-Lab Euclidean distances, not standard
-   Delta E or probabilities. The original relaxed background-change candidate
+   Both distances use the same configured Lab metric: unweighted Euclidean by
+   default, or scaled L/a/b with the optional channel tolerances below. They are
+   not standardized Delta E or probabilities. The original relaxed background-change candidate
    condition also remains required.
 4. Recompute connectivity in this fixed color domain, starting from the seed
    region, with a maximum geodesic boundary distance. Models are never updated
    using inferred pixels, avoiding self-reinforcing color drift.
 5. Unlike `color_local`, locally table-like pixels may be rescued **inside this
    bounded band**. These are inferred/unknown, not observed depth support.
-   Invalid color/depth, farther depth, ROI exclusions, and the optional
-   `local_max_reference_separation_m` upper band remain hard exclusions.
+   Invalid color/depth, ROI exclusions, and the optional
+   `local_max_reference_separation_m` upper band remain hard exclusions. Farther
+   depth is excluded by default, with the explicit opt-out described below.
 
 This specifically trades some shadow protection for smoother, color-supported
 edges. A same-color touching shadow that matches the model and differs from the
@@ -172,7 +174,7 @@ connectivity before applying geometric repair.
 New diagnostics have shape `(number_of_evaluable_models, H, W)` and matching
 `model_diagnostic_ids`. IDs reference `stages['fusion']['models']`:
 
-- `model_all_color_distances`: nearest palette distance for that model at every
+- `model_all_color_distances`: nearest palette distance in the configured scaled metric for that model at every
   usable color pixel, including rejected pixels. NaN means unusable color,
   not zero distance. Existing `model_color_distance` remains selected-only.
 - `model_all_source_distances_px`: exact obstacle-free 8-neighbor (Chebyshev)
@@ -198,16 +200,16 @@ New diagnostics have shape `(number_of_evaluable_models, H, W)` and matching
   `model_budget_exceeded` for omitted models. A distant evaluable model does not
   erase an unavailable local model's status.
 
-`model_background_distance` is the existing same-position full-Lab difference;
+`model_background_distance` is the existing same-position configured-metric Lab difference;
 ignore it on color-unusable pixels. Compare a model's color distance plus
 `model_background_margin` against this value. Do not combine the smallest color
 distance from one model with reachability from another. No model is inferred
 for unsupported training regions. These are algorithmic reasons, not semantic
 proof that a pixel is shadow or object.
 
-Diagnostic memory grows with model count (approximately 12 bytes per pixel per
+Diagnostic memory grows with model count (approximately 22 bytes per pixel per
 model for the retained new stacks, plus temporary allocations). At 640x480 with
-32 evaluable models the stacks alone use about 118 MB. Disable diagnostics in
+32 evaluable models the stacks alone use about 216 MB. Disable diagnostics in
 production when they are unnecessary. The connectivity pass adds diagnostic-only
 runtime; it does not change the existing growth radius or mask.
 
@@ -249,7 +251,7 @@ image is not an additional segmentation result and never alters the masks.
 
 There is no weighted sum of depth, object color, and background color, and no
 independent background weight parameter. Selection must pass separate gates.
-With corrected same-position background Lab difference `(dL, da, db)`:
+With the default equal model-channel tolerances and corrected same-position background Lab difference `(dL, da, db)`:
 
 ```
 dC = sqrt(da**2 + db**2)
@@ -275,3 +277,129 @@ its background, potentially admitting shadows. `background_score_margin` is
 uncertainty bookkeeping, not a background competition weight. Distances use
 OpenCV encoded 8-bit Lab, not standardized Delta E; extreme normalized scores
 are saturated internally for numerical safety.
+
+## Separate brightness and chroma tolerances
+
+For `color_model`, `model_luma_tolerance` and `model_chroma_tolerance` optionally
+split model brightness (L) and hue/chroma (a,b) sensitivity. Both default to
+`None`, resolved to `model_color_tolerance`; this preserves the previous metric
+and results. Larger tolerance means that channel is less restrictive. Example:
+
+```python
+segmenter = RGBDBackgroundSegmenter(
+    fusion_mode='color_model',
+    model_color_tolerance=18,       # reference scale, keep fixed while tuning
+    model_luma_tolerance=36,        # tolerate more brightness variation
+    model_chroma_tolerance=18,      # retain color discrimination
+    model_background_margin=1,
+)
+```
+
+Let `T=model_color_tolerance`, `TL=model_luma_tolerance`, and
+`TC=model_chroma_tolerance` after resolving defaults. The shared metric is:
+
+```
+D(delta) = T * sqrt((delta_L / TL)**2 + (sqrt(delta_a**2+delta_b**2) / TC)**2)
+d_model = min(D(current_Lab - palette_color))
+d_background = D(current_Lab - corrected_same_position_background_Lab)
+accept_color = (d_model <= T) AND (d_model + model_background_margin < d_background)
+```
+
+The color gate is an ellipse, not two independent rectangular limits: both
+channels individually below their tolerances can still exceed the combined
+limit. Palette quantization and bounded training-cluster distances use this
+same scaled space; prototypes remain medians in original encoded Lab and are
+never updated from inferred pixels. Object and background distances always use
+the **same** metric. Do not compare a newly weighted object distance to an old
+unweighted background distance.
+
+The margin remains in reference-scaled units, not a probability. Increasing TL
+can improve colored edge tolerance but also shrinks brightness-only background
+separation; with a positive margin this can make a gray object harder to admit.
+It is not equivalent to disabling brightness. Keep T fixed while tuning TL/TC,
+then adjust the margin separately if necessary. Explicit split tolerances and T
+must be within `[0.01,441]`; omitting both new options retains the legacy positive
+T validation. Resolved values and scale factors are in
+`stages['fusion']['model_color_metric']` and `result.parameters`.
+
+New per-model diagnostics:
+- `model_all_luma_distances`, `model_all_chroma_distances`: raw unweighted
+  components to the **same** nearest palette member under the configured metric.
+- `model_all_nearest_palette_indices`: zero-based member index, first on a tie;
+  -1 for unusable color. Its model is identified by `model_diagnostic_ids`.
+- Components are NaN for unusable color. No evaluable models still give empty
+  `(0,H,W)` stacks. The numeric example prints both components and the metric.
+
+The existing `background_chroma_tolerance` and `background_luma_tolerance` still
+control the initial difference-candidate gate, not this model metric. Local depth
+statistics retain their separate `local_color_sigma` weighting. New tolerances
+cannot create absent depth support, fix registration, bypass invalid data, or
+recover unseen object colors automatically.
+
+### Reproducible channel sweep
+
+Run `examples/example_rgbd_color_model_channels.py`. A 64x90 synthetic Lab scene
+has an 8 mm supported core and an 8-pixel edge band at table depth. Defaults in
+the example are T=18, TC=18, margin=1, radius=10, depth threshold=2 mm. Numbers
+below are core recall / edge recall / shadow acceptance. Ten deterministic seeds
+are averaged; only the noisy case changes between seeds. Real-camera accuracy
+has not been validated.
+
+| Case | TL=18 (legacy) | TL=36 | TL=60 |
+|---|---|---|---|
+| Colored bright edge, gray shadow | 1 / 0 / 0 | 1 / 1 / 0 | 1 / 1 / 0 |
+| Gray bright edge, darker gray shadow | 1 / 0 / 0 | 1 / 1 / .25 | 1 / 1 / .25 |
+| Gray edge almost matching background | 1 / 0 / 0 | 1 / 0 / 0 | 1 / 0 / 0 |
+| Same-color touching shadow | 1 / 0 / 0 | 1 / 1 / .25 | 1 / 1 / .25 |
+| Different-chroma touching shadow | 1 / 0 / 0 | 1 / 1 / 0 | 1 / 1 / 0 |
+| Thin 3 mm core, 2 mm independent depth noise | .995 / 0 / 0 | .995 / .844 / 0 | .995 / .844 / 0 |
+| No depth support | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+
+Color weighting is not a universal shadow separator. The gray/same-color shadow
+failure and coherent false depth seeds are explicit regression cases. Increasing
+TL beyond 36 did not improve these examples. Start with a moderate increase and
+compare both object recovery and false additions.
+
+## Optional negative margin and independent farther policy
+
+`model_background_margin` now accepts any finite signed number. A negative margin
+permits a pixel to be somewhat closer to the background than to its object model.
+For example, d_model=12, d_background=10, margin=-3 passes; margin=0 does not.
+This is deliberately permissive, not extra evidence. All candidate, tolerance,
+connectivity, depth validity, upper exclusion and distance-budget gates remain.
+Prefer a small relaxation (1 -> 0 -> -1) and inspect shadow/background additions.
+Large negative values can effectively remove background competition; they cannot
+remove the other gates. The default positive margin is unchanged.
+
+Farther means negative signed `background_depth-current_depth`, not an object
+above the table. Two options affect **only color_model**:
+
+```python
+# Keep positive depth evidence at 2 mm, but allow negative errors up to 4 mm.
+segmenter = RGBDBackgroundSegmenter(
+    fusion_mode='color_model', depth_threshold_m=.002,
+    model_farther_threshold_m=.004, model_reject_farther=True,
+)
+# Alternative experimental setting: model_reject_farther=False
+```
+
+`model_reject_farther=True` and `model_farther_threshold_m=None` preserve the
+legacy negative threshold equal to `depth_threshold_m`. A specified threshold
+must be positive finite metres. False disables this exclusion entirely (the
+configured negative threshold is then unused). Positive raw foreground and
+training thresholds are unchanged. Local signed-depth statistics still retain
+negative samples; disabling the veto does not turn them into positive evidence.
+
+Diagnostics distinguish observations from policy:
+- `farther_mask` and `model_raw_farther_mask`: original delta < -positive threshold.
+- `model_farther_excluded_mask`: actual model policy veto; bit 16 matches this.
+- `model_accepted_raw_farther_mask`: selected despite the original negative flag.
+- `stages['fusion']['farther_exclusion']`: enabled flag and configured threshold.
+
+Recovered negative-depth pixels are inferred/unknown, not confident observed
+foreground. Missing/invalid depth, upper-object exclusion, ROI and color guards
+remain. A 3 mm negative edge is excluded with T=2 mm, recoverable with an
+independent 4 mm limit or disabled veto. The exact same mechanism can admit a
+real farther/background surface with object-like color. Do not claim these
+options establish physical object boundaries or safe grasp support. If both
+color competition and farther fail, relaxing only one does not fix the other.

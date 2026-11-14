@@ -128,7 +128,7 @@ class ColorModelTests(unittest.TestCase):
         r=self.run_model((c,z,bc,bz));self.assertFalse(r.object_mask[19:21,36:40].any())
 
     def test_validation(self):
-        for kw in ({'model_color_tolerance':0},{'model_background_margin':-1},
+        for kw in ({'model_color_tolerance':0},{'model_background_margin':float('nan')},
                    {'model_boundary_radius_px':31},{'model_min_training_pixels':2},
                    {'model_max_colors':0},{'model_max_regions':0},
                    {'model_min_color_fraction':0}):

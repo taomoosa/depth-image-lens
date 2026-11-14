@@ -9,12 +9,20 @@ def explain_pixel(result, y, x):
     definitions = result.stages['fusion']['model_rejection_flags']
     report = dict(selected=bool(result.object_mask[y, x]),
                   decision=int(d['fusion_decision'][y, x]),
+                  raw_farther=bool(d['model_raw_farther_mask'][y,x]),
+                  farther_excluded=bool(d['model_farther_excluded_mask'][y,x]),
                   background_distance=float(d['model_background_distance'][y, x]),
+                  background_luma_distance=float(d['background_luma_distance'][y,x]),
+                  background_chroma_distance=float(d['background_chroma_distance'][y,x]),
+                  metric=result.stages['fusion']['model_color_metric'],
                   models=[])
     for i, model_id in enumerate(d['model_diagnostic_ids']):
         flags = int(d['model_all_rejection_flags'][i, y, x])
         report['models'].append(dict(
             id=int(model_id), color_distance=float(d['model_all_color_distances'][i,y,x]),
+            luma_distance=float(d['model_all_luma_distances'][i,y,x]),
+            chroma_distance=float(d['model_all_chroma_distances'][i,y,x]),
+            palette_index=int(d['model_all_nearest_palette_indices'][i,y,x]),
             source_distance_px=float(d['model_all_source_distances_px'][i,y,x]),
             reachable=bool(d['model_all_reachable_masks'][i,y,x]),
             selected_before_area_filter=bool(d['model_all_selected_masks'][i,y,x]),

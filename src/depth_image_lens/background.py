@@ -198,6 +198,8 @@ class RGBDBackgroundSegmenter:
                  local_color_tolerance=18., local_seed_min_area=8,
                  local_max_reference_separation_m=None,
                  model_color_tolerance=18., model_background_margin=3.,
+                 model_luma_tolerance=None, model_chroma_tolerance=None,
+                 model_reject_farther=True, model_farther_threshold_m=None,
                  model_boundary_radius_px=6, model_min_training_pixels=8,
                  model_max_colors=6, model_min_color_fraction=.03, model_max_regions=32):
         if fusion_mode not in ('union', 'depth_required', 'evidence', 'color_seeded', 'depth_anchored', 'color_supported', 'color_region', 'color_local', 'color_model'):
@@ -242,7 +244,22 @@ class RGBDBackgroundSegmenter:
                     raise ValueError
             except (TypeError, ValueError, OverflowError) as exc:
                 raise ValueError('local_max_reference_separation_m must be positive finite or None') from exc
+        if type(model_reject_farther) is not bool:
+            raise ValueError('model_reject_farther must be bool')
+        if model_farther_threshold_m is not None:
+            if (isinstance(model_farther_threshold_m, (bool, np.bool_)) or
+                    not np.isscalar(model_farther_threshold_m)):
+                raise ValueError('model_farther_threshold_m must be positive finite or None')
+            try:
+                model_farther_threshold_m = float(model_farther_threshold_m)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError('model_farther_threshold_m must be positive finite or None') from exc
+            if not np.isfinite(model_farther_threshold_m) or model_farther_threshold_m <= 0:
+                raise ValueError('model_farther_threshold_m must be positive finite or None')
+        split_model_metric = model_luma_tolerance is not None or model_chroma_tolerance is not None
         numeric = dict(model_color_tolerance=model_color_tolerance,
+                       model_luma_tolerance=(model_color_tolerance if model_luma_tolerance is None else model_luma_tolerance),
+                       model_chroma_tolerance=(model_color_tolerance if model_chroma_tolerance is None else model_chroma_tolerance),
                        model_background_margin=model_background_margin,
                        model_min_color_fraction=model_min_color_fraction, local_color_sigma=local_color_sigma, local_mean_depth_m=local_mean_depth_m,
                        local_min_depth_fraction=local_min_depth_fraction, local_min_valid_fraction=local_min_valid_fraction,
@@ -277,7 +294,7 @@ class RGBDBackgroundSegmenter:
                 numeric[key] = float(value)
             except (ValueError, TypeError, OverflowError) as exc:
                 raise ValueError(f'{key} must be a finite number') from exc
-            if not np.isfinite(numeric[key]) or numeric[key] < 0:
+            if not np.isfinite(numeric[key]) or (numeric[key] < 0 and key != 'model_background_margin'):
                 raise ValueError(f'{key} must be finite and nonnegative')
         for key in ('background_chroma_tolerance', 'background_luma_tolerance',
                     'depth_threshold_m', 'background_check_p95', 'background_max_offset'):
@@ -295,6 +312,12 @@ class RGBDBackgroundSegmenter:
         for key in ('local_color_sigma', 'local_color_tolerance', 'model_color_tolerance'):
             if not 0 < numeric[key] <= 441:
                 raise ValueError(f'{key} must be in (0,441]')
+        for key in ('model_luma_tolerance', 'model_chroma_tolerance'):
+            if not 0 < numeric[key] <= 441:
+                raise ValueError(f'{key} must be in (0,441]')
+        if split_model_metric and min(numeric[key] for key in
+                ('model_color_tolerance', 'model_luma_tolerance', 'model_chroma_tolerance')) < .01:
+            raise ValueError('explicit split model tolerances and model_color_tolerance must be >=0.01')
         for key in ('region_min_valid_fraction', 'region_min_depth_fraction', 'region_color_relaxation_ratio'):
             if not 0 < numeric[key] <= 1:
                 raise ValueError(f'{key} must be in (0,1]')
@@ -325,7 +348,8 @@ class RGBDBackgroundSegmenter:
             raise ValueError('depth_support_fraction must be in (0,1]')
         if not 0 < numeric['color_relaxation_ratio'] <= 1:
             raise ValueError('color_relaxation_ratio must be in (0,1]')
-        self.parameters = dict(numeric, fusion_mode=fusion_mode, missing_depth_policy=missing_depth_policy,
+        self.parameters = dict(numeric, model_reject_farther=model_reject_farther,
+                               model_farther_threshold_m=model_farther_threshold_m, fusion_mode=fusion_mode, missing_depth_policy=missing_depth_policy,
                                min_object_area=min_object_area, background_compensate=background_compensate,
                                depth_support_radius_px=depth_support_radius_px,
                                color_growth_max_steps=color_growth_max_steps,
@@ -502,7 +526,8 @@ class RGBDBackgroundSegmenter:
                     if key in fusion_debug:
                         fusion_debug[key] &= ~filtered
         if p['fusion_mode'] == 'color_model':
-            for key in ('model_training_mask', 'model_source_mask', 'model_rescued_background_mask'):
+            for key in ('model_training_mask', 'model_source_mask', 'model_rescued_background_mask',
+                        'model_accepted_raw_farther_mask'):
                 fusion_debug[key] &= ~filtered
         if p['fusion_mode'] in ('color_local', 'color_model'):
             fusion_debug['local_seed_mask'] &= ~filtered
@@ -551,6 +576,21 @@ class RGBDBackgroundSegmenter:
                                             for code, reason in reasons.items()})
         if p['fusion_mode'] == 'color_model':
             stages['fusion']['models'] = fusion_debug['model_statistics']
+            stages['fusion']['farther_exclusion'] = dict(
+                enabled=p['model_reject_farther'],
+                threshold_m=(p['depth_threshold_m'] if p['model_farther_threshold_m'] is None else p['model_farther_threshold_m']),
+                affects='color_model_only_not_raw_depth_foreground_or_training_threshold')
+            if p['model_background_margin'] < 0:
+                stages['fusion']['warnings'].append('negative_model_margin_can_prefer_pixels_closer_to_background')
+            if not p['model_reject_farther'] or p['model_farther_threshold_m'] is not None:
+                stages['fusion']['warnings'].append('custom_farther_policy_can_admit_true_background_or_negative_depth_noise')
+            stages['fusion']['model_color_metric'] = dict(
+                luma_tolerance=p['model_luma_tolerance'], chroma_tolerance=p['model_chroma_tolerance'],
+                reference_tolerance=p['model_color_tolerance'],
+                luma_scale=p['model_color_tolerance']/p['model_luma_tolerance'],
+                chroma_scale=p['model_color_tolerance']/p['model_chroma_tolerance'],
+                rule='same_scaled_Lab_metric_for_palette_object_and_background',
+                units='reference_scaled_OpenCV_encoded_Lab_not_standardized_Delta_E')
             stages['fusion']['model_rejection_flags'] = {str(k): v for k, v in MODEL_REJECTION_FLAGS.items()}
             metrics['model_budget_exceeded'] = fusion_debug['model_budget_exceeded']
             stages['fusion']['warnings'] += [

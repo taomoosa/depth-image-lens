@@ -25,13 +25,14 @@ MODEL_DECISION_REASONS = {
 }
 
 
-def _palette(colors, max_colors, tolerance, min_fraction):
+def _palette(colors, max_colors, tolerance, min_fraction, scales=None):
     """Deterministic dense color clusters; never update from inferred pixels.
 
     Quantized bins locate modes without tying every unique noisy color. Each
     prototype is a coordinate-wise median of its bounded training cluster.
     Small unsupported color tails do not create independent prototypes.
     """
+    scales = np.ones(3) if scales is None else np.asarray(scales)
     remaining = np.ones(len(colors), bool)
     result = []
     minimum = max(3, int(np.ceil(len(colors) * min_fraction)))
@@ -39,11 +40,11 @@ def _palette(colors, max_colors, tolerance, min_fraction):
         indices = np.flatnonzero(remaining)
         if len(indices) < minimum:
             break
-        keys, inverse, counts = np.unique(np.floor(colors[indices] / 6).astype(np.int16),
+        keys, inverse, counts = np.unique(np.floor(colors[indices] * scales / 6).astype(np.int64),
                                           axis=0, return_inverse=True, return_counts=True)
         mode = int(np.argmax(counts))
         center = np.median(colors[indices[inverse == mode]], axis=0)
-        near = remaining & (np.linalg.norm(colors-center, axis=1) <= tolerance * .5)
+        near = remaining & (np.linalg.norm((colors-center) * scales, axis=1) <= tolerance * .5)
         if near.sum() >= minimum:
             result.append(np.median(colors[near], axis=0))
         remaining[near] = False
@@ -54,16 +55,23 @@ def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
                        color_uncertain, lab, edge_valid, color_debug, valid,
                        roi, parameters, diagnostics=False):
     p = parameters
+    scales = np.array([p['model_color_tolerance']/p['model_luma_tolerance'],
+                       p['model_color_tolerance']/p['model_chroma_tolerance'],
+                       p['model_color_tolerance']/p['model_chroma_tolerance']])
+    raw_farther = farther
+    farther_threshold = p['depth_threshold_m'] if p['model_farther_threshold_m'] is None else p['model_farther_threshold_m']
+    farther = (valid & (delta < -farther_threshold) if p['model_reject_farther']
+               else np.zeros(valid.shape, bool))
     _, _, _, local = color_local_fusion(
         delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
         lab, edge_valid, color_debug, valid, roi, p)
     usable = color_usable & edge_valid & ~color_debug['background_photometric_clipped_mask']
     domain = local['local_candidate_mask'] & valid & ~farther & ~local['local_upper_excluded_mask']
     depth_training = domain & (delta > p['depth_threshold_m'] + p['depth_margin_m'])
-    # Same-position background distance, in the same encoded full-Lab units as
+    # Same-position background distance, in the same scaled Lab metric as
     # model distance. A large change alone cannot authorize a pixel.
-    background_distance = np.hypot(color_debug['background_chroma_distance'],
-                                   color_debug['background_luma_distance'])
+    background_distance = np.hypot(color_debug['background_chroma_distance'] * scales[1],
+                                   color_debug['background_luma_distance'] * scales[0])
     cv = _opencv()
     count, labels, stats, _ = cv.connectedComponentsWithStats(local['local_seed_mask'].astype(np.uint8), connectivity=8)
     order = sorted(range(1,count), key=lambda k: (-int(stats[k,cv.CC_STAT_AREA]),k))
@@ -83,15 +91,26 @@ def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
         if n < p['model_min_training_pixels']:
             unavailable |= core
             record['status']='insufficient_depth_training';models.append(record);continue
-        palette=_palette(lab[training],p['model_max_colors'],p['model_color_tolerance'],p['model_min_color_fraction'])
+        palette=_palette(lab[training],p['model_max_colors'],p['model_color_tolerance'],p['model_min_color_fraction'],scales)
         record['colors_lab']=[c.tolist() for c in palette]
         if not palette:
             unavailable |= core
             record['status']='no_supported_color_mode';models.append(record);continue
         usable_model_count += 1
         distance=np.full(valid.shape,np.inf)
-        for color in palette:
-            distance=np.minimum(distance,np.linalg.norm(lab-color,axis=2))
+        if diagnostics:
+            best_luma=np.full(valid.shape,np.nan,np.float32)
+            best_chroma=np.full(valid.shape,np.nan,np.float32)
+            best_prototype=np.full(valid.shape,-1,np.int16)
+        for palette_index,color in enumerate(palette):
+            difference=lab-color
+            candidate_distance=np.linalg.norm(difference * scales,axis=2)
+            if diagnostics:
+                better=candidate_distance < distance
+                best_luma[better]=np.abs(difference[...,0][better])
+                best_chroma[better]=np.hypot(difference[...,1],difference[...,2])[better]
+                best_prototype[better]=palette_index
+            distance=np.minimum(distance,candidate_distance)
         color_ok=(domain & (distance <= p['model_color_tolerance']) &
                   (distance + p['model_background_margin'] < background_distance))
         source=core & color_ok
@@ -129,7 +148,9 @@ def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
                 flags |= 256
             measured_distance = distance.astype(np.float32)
             measured_distance[~usable] = np.nan
-            evaluations.append((label, measured_distance, source_distance, flags, reachable, connected.copy()))
+            best_luma[~usable]=np.nan; best_chroma[~usable]=np.nan; best_prototype[~usable]=-1
+            evaluations.append((label, measured_distance, source_distance, flags, reachable, connected.copy(),
+                                best_luma,best_chroma,best_prototype))
         new=connected & ~selected
         model_labels[new]=label;distances[new]=distance[new];steps[new]=local_steps[new]
         selected|=connected;trained|=training & connected;source_mask|=source
@@ -148,7 +169,10 @@ def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
     decision[deferred]=3;decision[suppressed]=4
     decision[unavailable | (local['local_candidate_mask'] & ~valid) | local['local_upper_excluded_mask']]=5
     decision[trained]=1;decision[inferred]=7
-    local.update(fusion_decision=decision,model_training_mask=trained,model_source_mask=source_mask,
+    local.update(model_raw_farther_mask=raw_farther.copy(),
+                 model_farther_excluded_mask=farther.copy(),
+                 model_accepted_raw_farther_mask=selected & raw_farther,
+                 fusion_decision=decision,model_training_mask=trained,model_source_mask=source_mask,
                  model_rejected_core_mask=rejected,model_rescued_background_mask=rescued,
                  model_unavailable_mask=unavailable,
                  model_label_map=model_labels,model_color_distance=distances,
@@ -167,7 +191,10 @@ def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
             ('model_all_source_distances_px', 2, np.float32),
             ('model_all_rejection_flags', 3, np.uint16),
             ('model_all_reachable_masks', 4, bool),
-            ('model_all_selected_masks', 5, bool)):
+            ('model_all_selected_masks', 5, bool),
+            ('model_all_luma_distances', 6, np.float32),
+            ('model_all_chroma_distances', 7, np.float32),
+            ('model_all_nearest_palette_indices', 8, np.int16)):
             local[name] = (np.stack([e[index] for e in evaluations]) if evaluations
                            else np.empty(shape, dtype=dtype))
         local['model_no_evaluable_model_mask'] = roi & (not evaluations)
