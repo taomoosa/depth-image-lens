@@ -403,3 +403,53 @@ independent 4 mm limit or disabled veto. The exact same mechanism can admit a
 real farther/background surface with object-like color. Do not claim these
 options establish physical object boundaries or safe grasp support. If both
 color competition and farther fail, relaxing only one does not fix the other.
+
+## Experimental color-core training guard
+
+`model_training_policy="color_core"` is an opt-in alternative to the default
+`"legacy"` training. It targets strong erroneous depth in a thin band just outside
+an object, which can otherwise teach the palette a table color.
+
+1. Propose at most 16 fixed color clusters from the existing strong-depth input.
+2. For each proposed color, find connected matching color regions in observed RGB,
+   including pixels outside the seed. Matching uses half the scaled model color
+   tolerance. This avoids validating only the already-positive depth samples.
+3. Exclude a band of `model_training_inset_px` (default 2, range 0..10) from real
+   color boundaries for **learning only**. Image and unobserved ROI edges are not
+   treated as evidence of a color boundary.
+4. In each remaining interior, require `local_min_valid_fraction`,
+   `local_min_depth_fraction`, and `local_mean_depth_m` (the last comparison is
+   `>=`). Signed depth is clipped using `local_depth_clip_m`; negative samples
+   remain evidence. Invalid depth reduces coverage rather than disappearing.
+5. Retain strong-depth interior pixels whose same-position background distance
+   exceeds `max(0, model_background_margin)`. Require
+   `model_min_training_pixels` per connected color region. Refit the final colors
+   to these retained pixels only, then apply `model_max_colors` to passing colors.
+
+The output mask is **not eroded**. Accepted color regions supply sources and the
+usual bounded color inference reconstructs boundaries. Rejected color regions do
+not supply sources even if another accepted region has a similar color. A thin
+object without a usable interior is marked unresolved instead of falling back to
+possibly contaminated learning input. This can reduce recall of narrow objects.
+A coherent large depth bias, identical-color shadow, or table/object with
+indistinguishable observations remains unsolved. This option is experimental and
+has not been validated against the user's real camera data.
+
+```python
+segmenter = RGBDBackgroundSegmenter(
+    fusion_mode="color_model",
+    model_training_policy="color_core",
+    model_training_inset_px=2,
+    model_max_colors=2,
+)
+```
+
+With `diagnostics=True`, inspect `model_training_input_mask` (all raw proposal
+input within seed regions processed under `model_max_regions`), `model_training_used_mask` (actual accepted palette fit input),
+`model_training_excluded_mask`, and `model_training_interior_mask`. They describe
+learning before final object-area filtering. The older `model_training_mask`
+continues to mean learning pixels that also survived final selection. Independent
+`model_training_*_mask` failure images and `model_training_group_statistics`
+expose coverage, support, signed mean, background exclusions, interior size and
+color-budget failures. The GUI lists these images and supports overlays and pixel
+inspection. The policy and inset can be changed with **Edit all settings**.

@@ -202,7 +202,8 @@ class RGBDBackgroundSegmenter:
                  model_luma_tolerance=None, model_chroma_tolerance=None,
                  model_reject_farther=True, model_farther_threshold_m=None,
                  model_boundary_radius_px=6, model_min_training_pixels=8,
-                 model_max_colors=6, model_min_color_fraction=.03, model_max_regions=32):
+                 model_max_colors=6, model_min_color_fraction=.03, model_max_regions=32,
+                 model_training_policy="legacy", model_training_inset_px=2):
         if fusion_mode not in ('union', 'depth_required', 'evidence', 'color_seeded', 'depth_anchored', 'color_supported', 'color_region', 'color_local', 'color_model'):
             raise ValueError('fusion_mode must be union, depth_required, evidence, color_seeded, depth_anchored, color_supported, color_region, color_local or color_model')
         for key, value, lower, upper in (('anchored_refine_radius_px', anchored_refine_radius_px, 0, 20),
@@ -232,6 +233,7 @@ class RGBDBackgroundSegmenter:
                 ('model_boundary_radius_px', model_boundary_radius_px, 0, 30),
                 ('model_min_training_pixels', model_min_training_pixels, 3, 1000000),
                 ('model_max_colors', model_max_colors, 1, 16),
+                ('model_training_inset_px', model_training_inset_px, 0, 10),
                 ('model_max_regions', model_max_regions, 1, 128)):
             if type(value) is not int or not lower <= value <= upper:
                 raise ValueError(f'{key} must be an integer in {lower}..{upper}')
@@ -245,6 +247,8 @@ class RGBDBackgroundSegmenter:
                     raise ValueError
             except (TypeError, ValueError, OverflowError) as exc:
                 raise ValueError('local_max_reference_separation_m must be positive finite or None') from exc
+        if model_training_policy not in ('legacy', 'color_core'):
+            raise ValueError('model_training_policy must be legacy or color_core')
         if type(model_reject_farther) is not bool:
             raise ValueError('model_reject_farther must be bool')
         if model_farther_threshold_m is not None:
@@ -349,7 +353,9 @@ class RGBDBackgroundSegmenter:
             raise ValueError('depth_support_fraction must be in (0,1]')
         if not 0 < numeric['color_relaxation_ratio'] <= 1:
             raise ValueError('color_relaxation_ratio must be in (0,1]')
-        self.parameters = dict(numeric, model_reject_farther=model_reject_farther,
+        self.parameters = dict(numeric, model_training_policy=model_training_policy,
+                               model_training_inset_px=model_training_inset_px,
+                               model_reject_farther=model_reject_farther,
                                model_farther_threshold_m=model_farther_threshold_m, fusion_mode=fusion_mode, missing_depth_policy=missing_depth_policy,
                                min_object_area=min_object_area, background_compensate=background_compensate,
                                depth_support_radius_px=depth_support_radius_px,

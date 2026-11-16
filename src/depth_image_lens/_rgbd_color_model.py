@@ -4,6 +4,7 @@ import numpy as np
 from ._rgbd_color_local import color_local_fusion
 from ._rgbd_fusion import _neighbors8
 from .debug import _opencv
+from ._rgbd_model_training import select_color_core_training
 
 MODEL_REJECTION_FLAGS = {
     1: 'outside_roi', 2: 'color_unusable_or_clipped', 4: 'depth_invalid',
@@ -81,17 +82,39 @@ def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
     distances=np.full(valid.shape,np.nan); models=[]
     unavailable = np.isin(labels, order[p['model_max_regions']:])
     evaluations = []
+    training_input = np.zeros(valid.shape, bool)
+    training_used = training_input.copy()
+    training_interior = training_input.copy()
+    training_records = []
     usable_model_count = 0
     budget_exceeded = len(order) > p['model_max_regions']
     for label in order[:p['model_max_regions']]:
         core = labels == label
         training = core & depth_training
+        training_input |= training
         n = int(training.sum())
         record=dict(id=label,seed_area=int(core.sum()),training_pixels=n,colors_lab=[])
         if n < p['model_min_training_pixels']:
             unavailable |= core
             record['status']='insufficient_depth_training';models.append(record);continue
-        palette=_palette(lab[training],p['model_max_colors'],p['model_color_tolerance'],p['model_min_color_fraction'],scales)
+        if p.get('model_training_policy', 'legacy') == 'color_core':
+            proposals = _palette(lab[training], 16, p['model_color_tolerance'],
+                                 p['model_min_color_fraction'], scales)
+            palette, training, interior, records, accepted_sources, failures = select_color_core_training(
+                proposals, lab, training, usable & roi, valid,
+                local['local_upper_excluded_mask'], delta, depth_fg,
+                background_distance, scales, p, diagnostics)
+            if diagnostics:
+                for key, mask in failures.items():
+                    if key in local: local[key] |= mask
+                    else: local[key] = mask
+            training_interior |= interior
+            training_records.extend(dict(model_id=label, **r) for r in records)
+            record['raw_training_pixels'] = n
+            record['training_pixels'] = int(training.sum())
+        else:
+            palette=_palette(lab[training],p['model_max_colors'],p['model_color_tolerance'],p['model_min_color_fraction'],scales)
+        training_used |= training if palette else False
         record['colors_lab']=[c.tolist() for c in palette]
         if not palette:
             unavailable |= core
@@ -114,6 +137,8 @@ def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
         color_ok=(domain & (distance <= p['model_color_tolerance']) &
                   (distance + p['model_background_margin'] < background_distance))
         source=core & color_ok
+        if p.get("model_training_policy", "legacy") == "color_core":
+            source &= accepted_sources
         # Reachability is recomputed in the fixed color domain, not from a
         # changing per-frontier prototype. Table-like pixels may be inferred
         # only inside this explicitly bounded boundary band.
@@ -184,6 +209,11 @@ def color_model_fusion(delta, depth_fg, farther, color_fg, color_usable,
                  confident_background_mask=local['local_background_mask'] & ~selected,
                  unknown_mask=unknown)
     if diagnostics:
+        local.update(model_training_input_mask=training_input,
+                     model_training_used_mask=training_used,
+                     model_training_excluded_mask=training_input & ~training_used,
+                     model_training_interior_mask=training_interior,
+                     model_training_group_statistics=training_records)
         shape = (0,) + valid.shape
         local['model_diagnostic_ids'] = np.array([e[0] for e in evaluations], np.int32)
         for name, index, dtype in (

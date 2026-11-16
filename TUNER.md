@@ -277,3 +277,10 @@ GUI. Recording is opt-in and never feeds back into selection. Local/supported
 boundary inspection performs eight additional neighbor passes only when enabled;
 full diagnostics therefore cost extra memory and time. Display switching and
 pixel inspection reuse stored results and do not rerun detection.
+
+The optional `color_model` setting `model_training_policy: "color_core"` enables
+training-only interior validation. See `RGBD_COLOR_MODEL.md` for limitations.
+The `model_training_input_mask` and `model_training_used_mask` panels show actual
+palette proposal/fit input, separately from the legacy final-selected training
+mask. Independent training failure panels and group statistics explain rejected
+colors without treating overlapping conditions as unique causal reasons.

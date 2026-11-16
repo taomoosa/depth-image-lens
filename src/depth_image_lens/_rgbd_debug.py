@@ -80,6 +80,18 @@ def detailed_fusion_diagnostics(debug, p, roi, valid, color_fg, depth_fg,
         mask('local_density_failed', domain & (debug['local_depth_support_fraction'] < p['local_min_depth_fraction']), 'Local positive-depth fraction fails seed gate.')
         mask('local_seed_area_filtered', debug['raw_local_seed_mask'] & ~debug['local_seed_mask'] & ~filtered, 'Raw local seed component below minimum seed area.')
         mask('locally_table_like', debug['local_background_mask'], 'Local statistics classify as table-like; model mode can override.')
+    if mode == 'color_model':
+        descriptions = {
+            'model_training_mask': 'Legacy view: training pixels that also survive final selection, not all learning input.',
+            'model_training_input_mask': 'Raw strong-depth input in processed seed regions, before training guard and final selection; excludes model_max_regions budget omissions.',
+            'model_training_used_mask': 'Pixels used to fit accepted palettes, before final selection or area filtering.',
+            'model_training_excluded_mask': 'Raw palette input not used by an accepted palette (may include insufficient model or color budget).',
+            'model_training_interior_mask': 'Observed color interiors evaluated by color_core; not necessarily accepted.'}
+        for key, description in descriptions.items():
+            meta[key] = dict(description=description)
+        for key in debug:
+            if key.startswith('model_training_') and key.endswith('_mask') and key not in descriptions:
+                meta[key] = dict(description='Color-core training group condition: ' + key[15:-5] + '. Multiple conditions can overlap; see group statistics.', kind='overlapping_condition')
     if mode == 'depth_anchored':
         mask('refinement_negative', debug['refinement_excluded_mask'] | debug['background_anchor_mask'] | debug['raw_background_guard_mask'], 'Outside refinement domain or blocked by negative/background evidence.')
         mask('refinement_score_failed', debug['refinement_domain_mask'] & (debug['refinement_score'] <= .5) & ~debug['foreground_anchor_mask'], 'Mutable refinement score does not exceed 0.5; fixed anchors are separate.')
