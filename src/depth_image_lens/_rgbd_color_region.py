@@ -15,7 +15,7 @@ REGION_DECISION_REASONS = {
 
 def color_region_fusion(delta, depth_fg, farther, color_fg, color_usable,
                         color_uncertain, lab, edge_valid, color_debug, valid,
-                        roi, parameters):
+                        roi, parameters, *, diagnostics=False):
     """Partition full Lab colors, then judge each 8-connected region as a whole.
 
     Fixed representative colors prevent transitive color drift. Each region is
@@ -29,18 +29,36 @@ def color_region_fusion(delta, depth_fg, farther, color_fg, color_usable,
                  (color_debug['background_combined_score'] > p['region_color_relaxation_ratio']**2))
     shape = valid.shape
     color_ids = np.zeros(shape, np.int32)
+    # Detailed evidence is opt-in and never feeds selection. Distances refer to
+    # the fixed representative actually chosen by the greedy grouping, not a
+    # nearest-cluster probability. Unassigned/outside pixels are NaN.
+    if diagnostics:
+        group_distance = np.full(shape, np.nan)
+        representatives = []
+        gate_maps = {name: np.zeros(shape, bool) for name in (
+            'area', 'valid_fraction', 'mean_depth', 'depth_fraction', 'observed')}
+        region_accepted = np.zeros(shape, bool)
+        area_map = np.zeros(shape, np.int32)
     if candidate.any():
         colors, inverse, counts = np.unique(lab[candidate], axis=0, return_inverse=True, return_counts=True)
         inverse = inverse.reshape(-1)
         assignments = np.zeros(len(colors), np.int32)
+        if diagnostics:
+            assigned_distance = np.full(len(colors), np.nan)
         for group in range(1, p['region_max_color_groups'] + 1):
             remaining = assignments == 0
             if not remaining.any():
                 break
             seed = int(np.argmax(np.where(remaining, counts, 0)))
-            near = remaining & (np.linalg.norm(colors - colors[seed], axis=1) <= p['region_color_tolerance'])
+            distance = np.linalg.norm(colors - colors[seed], axis=1)
+            near = remaining & (distance <= p['region_color_tolerance'])
             assignments[near] = group
+            if diagnostics:
+                assigned_distance[near] = distance[near]
+                representatives.append(dict(id=group, lab=colors[seed].tolist()))
         color_ids[candidate] = assignments[inverse]
+        if diagnostics:
+            group_distance[candidate] = assigned_distance[inverse]
     region_ids = np.zeros(shape, np.int32)
     selected = np.zeros(shape, bool)
     stats = []
@@ -75,6 +93,16 @@ def color_region_fusion(delta, depth_fg, farther, color_fg, color_usable,
             enough = area >= p['region_min_area'] and coverage >= p['region_min_valid_fraction']
             accepted = bool(enough and mean_ratio is not None and mean_ratio > p['region_mean_depth_ratio'] and density >= p['region_min_depth_fraction'])
             selected[sl] |= seen & ~farther[sl] & accepted
+            if diagnostics:
+                area_map[sl][part] = area
+                region_accepted[sl][part] = accepted
+                gates = dict(area=area >= p['region_min_area'],
+                             valid_fraction=coverage >= p['region_min_valid_fraction'],
+                             observed=n > 0,
+                             mean_depth=mean_ratio is not None and mean_ratio > p['region_mean_depth_ratio'],
+                             depth_fraction=density >= p['region_min_depth_fraction'])
+                for name, passed in gates.items():
+                    gate_maps[name][sl][part] = passed
             if not enough:
                 small_or_missing[sl] |= part
             support_map[sl][part] = density
@@ -106,4 +134,26 @@ def color_region_fusion(delta, depth_fg, farther, color_fg, color_usable,
                  accepted_color_only_mask=np.zeros(shape,bool), accepted_growth_mask=inferred,
                  inferred_foreground_mask=inferred, confident_foreground_mask=selected & depth_fg & ~color_uncertain,
                  confident_background_mask=np.zeros(shape,bool), unknown_mask=unknown)
+    if diagnostics:
+        assigned = region_ids > 0
+        debug.update(
+            region_area_px=area_map,
+            region_group_color_distance=group_distance,
+            region_color_representatives=representatives,
+            region_accepted_mask=region_accepted,
+            region_color_budget_exceeded_mask=candidate & (color_ids == 0),
+            region_invalid_depth_blocked_mask=region_accepted & ~valid,
+            region_farther_blocked_mask=region_accepted & valid & farther,
+            region_color_score_pass_mask=roi & (color_debug['background_combined_score'] > p['region_color_relaxation_ratio'] ** 2),
+            region_color_unusable_mask=roi & ~color_usable,
+            region_edge_invalid_mask=roi & ~edge_valid,
+            region_thresholds={key: p[key] for key in (
+                'region_color_tolerance', 'region_color_relaxation_ratio',
+                'region_min_area', 'region_min_valid_fraction',
+                'region_mean_depth_ratio', 'region_min_depth_fraction',
+                'region_depth_clip_ratio', 'region_max_color_groups',
+                'depth_threshold_m')})
+        for name, passed in gate_maps.items():
+            debug['region_pass_' + name + '_mask'] = passed
+            debug['region_fail_' + name + '_mask'] = assigned & ~passed
     return selected, suppressed, deferred, debug

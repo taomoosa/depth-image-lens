@@ -9,6 +9,7 @@ from ._rgbd_fusion import (evidence_fusion, color_seeded_fusion, DECISION_REASON
                            SEEDED_DECISION_REASONS, depth_anchored_fusion, ANCHORED_DECISION_REASONS)
 
 from ._rgbd_color_model import color_model_fusion, MODEL_DECISION_REASONS, MODEL_REJECTION_FLAGS, render_model_rejection_maps
+from ._rgbd_debug import detailed_fusion_diagnostics
 from ._rgbd_color_local import color_local_fusion, LOCAL_DECISION_REASONS
 from ._rgbd_color_region import color_region_fusion, REGION_DECISION_REASONS
 from ._rgbd_color_supported import color_supported_fusion, SUPPORTED_DECISION_REASONS
@@ -482,7 +483,7 @@ class RGBDBackgroundSegmenter:
         elif p['fusion_mode'] == 'color_supported':
             obj, suppressed, deferred, fusion_debug = color_supported_fusion(
                 delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
-                lab, current_color_valid & roi, color_debug, valid, roi, p)
+                lab, current_color_valid & roi, color_debug, valid, roi, p, diagnostics=diagnostics)
             observed = valid.copy()
             uncertain |= fusion_debug['unknown_mask']
             fusion_debug['unknown_mask'] = uncertain.copy()
@@ -497,7 +498,7 @@ class RGBDBackgroundSegmenter:
         elif p['fusion_mode'] == 'color_local':
             obj, suppressed, deferred, fusion_debug = color_local_fusion(
                 delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
-                lab, current_color_valid & roi, color_debug, valid, roi, p)
+                lab, current_color_valid & roi, color_debug, valid, roi, p, diagnostics=diagnostics)
             observed = valid.copy()
             uncertain |= fusion_debug['unknown_mask']
             fusion_debug['unknown_mask'] = uncertain.copy()
@@ -505,7 +506,7 @@ class RGBDBackgroundSegmenter:
         elif p['fusion_mode'] == 'color_region':
             obj, suppressed, deferred, fusion_debug = color_region_fusion(
                 delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
-                lab, current_color_valid & roi, color_debug, valid, roi, p)
+                lab, current_color_valid & roi, color_debug, valid, roi, p, diagnostics=diagnostics)
             observed = valid.copy()
             uncertain |= fusion_debug['unknown_mask']
             fusion_debug['unknown_mask'] = uncertain.copy()
@@ -656,6 +657,13 @@ class RGBDBackgroundSegmenter:
             debug = dict(color_debug, **fusion_debug, depth_difference_m=delta, color_usable_mask=color_usable,
                          farther_mask=farther, depth_threshold_margin_mask=near_threshold,
                          color_only_mask=color_fg & ~depth_fg, filtered_mask=filtered, work_roi=roi)
+            debug.update(detailed_fusion_diagnostics(debug, p, roi, valid, color_fg, depth_fg,
+                color_usable, color_uncertain, farther, obj, filtered))
+            for code, meaning in stages['fusion'].get('decision_reasons', {}).items():
+                key = 'reason_decision_' + code + '_mask'
+                if key in debug['diagnostic_metadata']:
+                    debug['diagnostic_metadata'][key]['description'] = meaning
+
         return RGBDBackgroundResult(obj, uncertain, observed, color_fg, depth_fg, valid, conflict,
                                     p.copy(), stages, metrics, debug,
                                     suppressed_mask=suppressed, deferred_mask=deferred,

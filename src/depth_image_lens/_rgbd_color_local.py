@@ -20,7 +20,7 @@ LOCAL_DECISION_REASONS = {
 
 def color_local_fusion(delta, depth_fg, farther, color_fg, color_usable,
                        color_uncertain, lab, edge_valid, color_debug, valid,
-                       roi, parameters):
+                       roi, parameters, *, diagnostics=False):
     p = parameters
     radius = p['local_support_radius_px']
     usable = color_usable & edge_valid & ~color_debug['background_photometric_clipped_mask']
@@ -101,4 +101,7 @@ def color_local_fusion(delta, depth_fg, farther, color_fg, color_usable,
                  accepted_growth_mask=inferred.copy(), inferred_foreground_mask=inferred,
                  confident_foreground_mask=confident, confident_background_mask=background,
                  unknown_mask=unknown)
+    if diagnostics:
+        from ._rgbd_debug import growth_boundary_diagnostics
+        debug.update(growth_boundary_diagnostics(lab, prototype, grow_domain, selected, p['local_color_tolerance']))
     return selected, suppressed, deferred, debug

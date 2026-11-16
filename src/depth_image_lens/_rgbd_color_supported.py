@@ -18,7 +18,7 @@ SUPPORTED_DECISION_REASONS = {
 
 def color_supported_fusion(delta, depth_fg, farther, color_fg, color_usable,
                            color_uncertain, lab, edge_valid, color_debug, valid,
-                           roi, parameters):
+                           roi, parameters, *, diagnostics=False):
     """Validate seeds with local depth, then grow their *fixed* full-Lab colors.
 
     Distance to the source seed and bounded path length prevent gradual color
@@ -82,6 +82,10 @@ def color_supported_fusion(delta, depth_fg, farther, color_fg, color_usable,
         selected |= frontier
         step_map[frontier] = step
 
+    if diagnostics:
+        from ._rgbd_debug import growth_boundary_diagnostics
+        growth_debug = growth_boundary_diagnostics(lab, prototype, domain, selected, p['supported_color_tolerance'])
+
     # Every connected selected region must retain a nontrivial measured depth
     # fraction. This is an additional veto, never a whole-region acceptance rule.
     labels, parts = _components(selected)
@@ -128,4 +132,6 @@ def color_supported_fusion(delta, depth_fg, farther, color_fg, color_usable,
                  inferred_foreground_mask=inferred,
                  confident_foreground_mask=confident_fg,
                  confident_background_mask=confident_bg, unknown_mask=unknown)
+    if diagnostics:
+        debug.update(growth_debug)
     return selected, suppressed, deferred, debug
