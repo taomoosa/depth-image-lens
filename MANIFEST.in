@@ -35,3 +35,5 @@ recursive-include tests *.py
 # Evaluation runners are local tooling, not public API examples.
 exclude examples/benchmark_*.py examples/compare_*.py examples/evaluate_*.py examples/gallery_*.py
 exclude tests/compare_*.py
+
+include HANGING_PROFILE.md

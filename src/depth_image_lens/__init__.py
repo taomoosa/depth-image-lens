@@ -81,3 +81,7 @@ __all__ += ["OverheadObjectCounter", "ObjectCountResult"]
 from .top_entry_bridge import TopEntryBridgeDetector, TopEntryBridgeResult
 
 __all__ += ["TopEntryBridgeDetector", "TopEntryBridgeResult"]
+
+from .hanging_profile import HangingProfileAnalyzer, HangingProfileResult
+
+__all__ += ["HangingProfileAnalyzer", "HangingProfileResult"]
