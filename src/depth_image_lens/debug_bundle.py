@@ -1,6 +1,10 @@
 """Paged, exhaustive spatial diagnostics, rendered one page at a time."""
 import json
 import math
+import os
+import re
+import shutil
+import tempfile
 from pathlib import Path
 import numpy as np
 from .debug import _opencv, depth_canvas
@@ -17,7 +21,124 @@ def _json(value):
     return str(value)
 
 
-def save_debug_bundle(result, directory, color=None, *, columns=6, max_rows=4,
+class _IncompleteRollback(OSError):
+    """Recovery copies must be retained for manual restoration."""
+
+
+def _owned_bundle_files(directory):
+    """Read only a validated flat bundle manifest; never glob-delete pages."""
+    index = directory / 'index.json'
+    if not index.exists() and not index.is_symlink():
+        return set()
+    if index.is_symlink() or not index.is_file():
+        raise ValueError('existing index must be a regular bundle manifest')
+    try:
+        data = json.loads(index.read_text(encoding='utf8'))
+        if (not isinstance(data, dict) or data.get('version') != 1
+                or not isinstance(data.get('result_type'), str)
+                or not isinstance(data.get('entries'), list)
+                or not isinstance(data.get('pages'), list)):
+            raise ValueError('not a supported bundle index')
+        names = []
+        for page in data['pages']:
+            name = page['file']
+            if not isinstance(name, str) or not re.fullmatch(r'[0-9]{3,}_(overview|models)\.png', name):
+                raise ValueError('invalid bundle page name')
+            names.append(name)
+        if len(names) != len(set(names)):
+            raise ValueError('duplicate bundle page name')
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError('existing index is not a valid full-debug bundle; refusing overwrite') from exc
+    owned = {'index.json', *names}
+    for name in owned:
+        path = directory / name
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise ValueError('bundle outputs must be regular files, not links or directories')
+    return owned
+
+
+def _publish_bundle(staged, destination, owned, backup):
+    """Replace owned files only, with rollback for ordinary write failures."""
+    new_names = {p.name for p in staged.iterdir()}
+    for name in new_names:
+        target = destination / name
+        if target.is_symlink() or (target.exists() and name not in owned):
+            raise FileExistsError(f'refusing to replace unrelated output: {name}')
+        if target.exists() and not target.is_file():
+            raise ValueError('bundle output is not a regular file')
+    backup.mkdir()
+    present = {name for name in owned if (destination / name).exists()}
+    for name in present:
+        shutil.copy2(destination / name, backup / name)
+    touched = []
+    try:
+        # Publish index last; readers must not consume a bundle during an update.
+        for name in sorted(new_names - {'index.json'}):
+            os.replace(staged / name, destination / name)
+            touched.append(name)
+        for name in sorted(owned - new_names):
+            if (destination / name).exists():
+                (destination / name).unlink()
+                touched.append(name)
+        os.replace(staged / 'index.json', destination / 'index.json')
+        touched.append('index.json')
+    except Exception:
+        rollback_errors = []
+        for name in reversed(touched):
+            try:
+                if name in present:
+                    os.replace(backup / name, destination / name)
+                else:
+                    (destination / name).unlink(missing_ok=True)
+            except OSError as exc:
+                rollback_errors.append(str(exc))
+        if rollback_errors:
+            raise _IncompleteRollback(f'export failed and rollback was incomplete; recovery files retained at {backup}')
+        raise
+
+
+def save_debug_bundle(result, directory, color=None, *, overwrite=False, **options):
+    """Save full diagnostics, optionally replacing an existing bundle.
+
+    Overwrite only manages files listed by a valid previous index. Other files
+    are preserved, and name collisions are errors. Do not write concurrently.
+    """
+    if type(overwrite) is not bool:
+        raise ValueError('overwrite must be bool')
+    dest = Path(directory)
+    if any(p.is_symlink() for p in [dest, *dest.parents]):
+        raise ValueError('symlink output paths are not allowed')
+    if not dest.parent.is_dir():
+        raise ValueError('output parent must already exist')
+    exists = dest.exists()
+    if exists and (not overwrite or not dest.is_dir()):
+        raise FileExistsError('output exists; use overwrite=True for a directory')
+    owned = _owned_bundle_files(dest) if exists else set()
+    work = Path(tempfile.mkdtemp(prefix='.depth-bundle-', dir=dest.parent))
+    backup = work / 'backup'
+    retain_recovery = False
+    try:
+        staged = work / 'rendered'
+        _render_debug_bundle(result, staged, color, **options)
+        if not exists:
+            # Reserve the destination without replacing a directory created meanwhile.
+            dest.mkdir(exist_ok=False)
+        try:
+            _publish_bundle(staged, dest, owned, backup)
+        except Exception:
+            if not exists and not any(dest.iterdir()):
+                dest.rmdir()
+            raise
+    except _IncompleteRollback:
+        retain_recovery = True
+        raise
+    finally:
+        if not retain_recovery:
+            shutil.rmtree(work)
+    return dest / 'index.json'
+
+
+def _render_debug_bundle(result, directory, color=None, *, columns=6, max_rows=4,
                       tile_width=640, models='all', color_order='RGB', depth=None,
                       depth_scale_m=.001):
     """Save all acquired spatial arrays to numbered PNG pages and index.json.

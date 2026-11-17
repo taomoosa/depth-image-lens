@@ -190,4 +190,6 @@ conditions are grouped rather than exported as many individual images. See
 [FULL_DEBUG.md](FULL_DEBUG.md) and
 [the runnable example](examples/example_full_debug.py) for layout options, the
 index format, safety checks and interpretation limits. Compact `render_debug()`
-and `save_debug()` are unchanged.
+and `save_debug()` are unchanged. Pass `overwrite=True` to update an existing
+full bundle while preserving unrelated files; see the overwrite safety contract
+in the full guide.

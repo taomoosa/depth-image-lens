@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 import numpy as np
 from depth_image_lens.debug import DebugResultMixin
 
@@ -157,6 +158,110 @@ class DebugBundleTests(unittest.TestCase):
             self.assertEqual(data['stages']['fusion']['regions'],
                              result.stages['fusion']['regions'])
         np.testing.assert_array_equal(before, result.object_mask)
+
+    def test_overwrite_replaces_pages_removes_stale_and_preserves_unrelated(self):
+        diagnostics = {f'layer_{i}': np.ones((20, 32), bool) for i in range(12)}
+        with tempfile.TemporaryDirectory() as root:
+            dest = Path(root) / 'bundle'
+            ExampleResult(diagnostics).save_debug_bundle(dest, columns=2, max_rows=2, tile_width=160)
+            old = json.loads((dest / 'index.json').read_text())
+            (dest / 'notes.txt').write_text('keep')
+            (dest / '999_overview.png').write_bytes(b'unrelated')
+            ExampleResult().save_debug_bundle(dest, overwrite=True, tile_width=160)
+            new = json.loads((dest / 'index.json').read_text())
+            current = {p['file'] for p in new['pages']}
+            self.assertTrue(all((dest / name).exists() for name in current))
+            for page in old['pages']:
+                if page['file'] not in current:
+                    self.assertFalse((dest / page['file']).exists())
+            self.assertEqual((dest / 'notes.txt').read_text(), 'keep')
+            self.assertEqual((dest / '999_overview.png').read_bytes(), b'unrelated')
+
+    def test_existing_nonbundle_directory_and_collisions(self):
+        with tempfile.TemporaryDirectory() as root:
+            dest = Path(root) / 'bundle'; dest.mkdir()
+            (dest / 'notes.txt').write_text('keep')
+            ExampleResult().save_debug_bundle(dest, overwrite=True, tile_width=160)
+            self.assertEqual((dest / 'notes.txt').read_text(), 'keep')
+        with tempfile.TemporaryDirectory() as root:
+            dest = Path(root) / 'bundle'; dest.mkdir()
+            (dest / '001_overview.png').write_bytes(b'unrelated')
+            with self.assertRaises(FileExistsError):
+                ExampleResult().save_debug_bundle(dest, overwrite=True, tile_width=160)
+            self.assertEqual((dest / '001_overview.png').read_bytes(), b'unrelated')
+            self.assertFalse((dest / 'index.json').exists())
+
+    def test_overwrite_rejects_invalid_manifest_paths_and_symlinks(self):
+        for manifest in ({}, {'version': 1, 'result_type': 'X', 'entries': [],
+                             'pages': [{'file': '../outside.png'}]},
+                         {'version': 1, 'result_type': 'X', 'entries': [],
+                          'pages': [{'file': '001_overview.png'}] * 2}):
+            with self.subTest(manifest=manifest), tempfile.TemporaryDirectory() as root:
+                dest = Path(root) / 'bundle'; dest.mkdir()
+                old = json.dumps(manifest); (dest / 'index.json').write_text(old)
+                with self.assertRaises(ValueError):
+                    ExampleResult().save_debug_bundle(dest, overwrite=True, tile_width=160)
+                self.assertEqual((dest / 'index.json').read_text(), old)
+        with tempfile.TemporaryDirectory() as root:
+            dest = Path(root) / 'bundle'
+            ExampleResult().save_debug_bundle(dest, tile_width=160)
+            page = dest / '001_overview.png'; page.unlink()
+            outside = Path(root) / 'outside'; outside.write_text('keep')
+            page.symlink_to(outside)
+            with self.assertRaises(ValueError):
+                ExampleResult().save_debug_bundle(dest, overwrite=True, tile_width=160)
+            self.assertEqual(outside.read_text(), 'keep')
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(ValueError):
+                ExampleResult().save_debug_bundle(Path(root) / 'bundle', overwrite=1)
+
+    def test_render_failure_leaves_previous_bundle_unchanged(self):
+        with tempfile.TemporaryDirectory() as root:
+            dest = Path(root) / 'bundle'
+            ExampleResult().save_debug_bundle(dest, tile_width=160)
+            before = {p.name: p.read_bytes() for p in dest.iterdir()}
+            with mock.patch('depth_image_lens.debug_bundle._render_debug_bundle', side_effect=OSError('encode failed')):
+                with self.assertRaises(OSError):
+                    ExampleResult().save_debug_bundle(dest, overwrite=True, tile_width=160)
+            self.assertEqual(before, {p.name: p.read_bytes() for p in dest.iterdir()})
+            self.assertFalse(list(Path(root).glob('.depth-bundle-*')))
+
+    def test_publication_failure_rolls_back_pages_and_index(self):
+        import os
+        with tempfile.TemporaryDirectory() as root:
+            dest = Path(root) / 'bundle'
+            ExampleResult({f'p_{i}': np.ones((20, 32), bool) for i in range(8)}).save_debug_bundle(
+                dest, columns=2, max_rows=2, tile_width=160)
+            before = {p.name: p.read_bytes() for p in dest.iterdir()}
+            replace = os.replace
+            def fail_index(source, target):
+                if Path(source).parent.name == 'rendered' and Path(source).name == 'index.json':
+                    raise OSError('publish failed')
+                return replace(source, target)
+            with mock.patch('depth_image_lens.debug_bundle.os.replace', side_effect=fail_index):
+                with self.assertRaises(OSError):
+                    ExampleResult().save_debug_bundle(dest, overwrite=True, tile_width=160)
+            self.assertEqual(before, {p.name: p.read_bytes() for p in dest.iterdir()})
+            self.assertFalse(list(Path(root).glob('.depth-bundle-*')))
+
+    def test_failed_rollback_retains_recovery_files(self):
+        import os
+        with tempfile.TemporaryDirectory() as root:
+            dest = Path(root) / 'bundle'
+            ExampleResult().save_debug_bundle(dest, tile_width=160)
+            original = (dest / '001_overview.png').read_bytes()
+            replace = os.replace
+            def fail_publication_and_restore(source, target):
+                source = Path(source)
+                if source.parent.name == 'backup' or (source.parent.name == 'rendered' and source.name == 'index.json'):
+                    raise OSError('filesystem unavailable')
+                return replace(source, target)
+            with mock.patch('depth_image_lens.debug_bundle.os.replace', side_effect=fail_publication_and_restore):
+                with self.assertRaisesRegex(OSError, 'rollback was incomplete'):
+                    ExampleResult().save_debug_bundle(dest, overwrite=True, tile_width=160)
+            copies = list(Path(root).glob('.depth-bundle-*/backup/001_overview.png'))
+            self.assertEqual(len(copies), 1)
+            self.assertEqual(copies[0].read_bytes(), original)
 
     def test_original_render_debug_unchanged(self):
         result = ExampleResult()

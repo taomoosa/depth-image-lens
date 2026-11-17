@@ -1,7 +1,7 @@
 """Write grouped full diagnostics from a synthetic registered RGB-D scene.
 
 Run: python examples/example_full_debug.py /tmp/lens-full-debug-new
-The destination must not exist. No camera, external data or GUI is required.
+Use --overwrite to update an existing bundle. No camera, external data or GUI is required.
 """
 import argparse
 from pathlib import Path
@@ -11,8 +11,9 @@ from depth_image_lens import RGBDBackgroundSegmenter
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('output', type=Path, help='new output directory')
+    parser.add_argument('output', type=Path, help='output directory')
     parser.add_argument('--mode', choices=('color_model', 'color_first'), default='color_model')
+    parser.add_argument('--overwrite', action='store_true', help='replace only existing bundle outputs')
     args = parser.parse_args()
     background_color = np.full((400, 640, 3), (175, 170, 160), np.uint8)
     color = background_color.copy()
@@ -28,7 +29,7 @@ def main():
         color_order='RGB', registered_to_depth=True, depth_scale_m=.001,
         diagnostics=True)
     index = result.save_debug_bundle(args.output, color,
-        columns=6, max_rows=4, tile_width=640, models='all')
+        columns=6, max_rows=4, tile_width=640, models='all', overwrite=args.overwrite)
     print(index)
 
 

@@ -21,10 +21,31 @@ index_path = result.save_debug_bundle(
 )
 ```
 
-Install the optional `debug` dependency for PNG rendering. Use a **new directory**
-for each run. Existing directories and symlink destinations are rejected rather
-than overwritten. A returned index path indicates a completed export. If writing
-fails, partial files may remain; use a different destination on retry.
+Install the optional `debug` dependency for PNG rendering. By default, use a new
+directory for each run; existing destinations are rejected. To update a previous
+export explicitly:
+
+```python
+result.save_debug_bundle("debug_run_001", color, overwrite=True)
+```
+
+With `overwrite=True`, a valid previous `index.json` identifies the managed PNG
+pages. New pages and the index replace those outputs; obsolete pages listed in
+the previous index are removed. Unrelated files are preserved, including PNGs
+not listed by the old index. An existing directory without an index is allowed
+if none of the new output names collide with existing files. Invalid manifests,
+unsafe page names, symlink paths/managed outputs, and unrelated name collisions
+are rejected rather than overwritten.
+
+All rendering finishes in a temporary sibling directory before any existing
+bundle changes. Ordinary publication failures restore the previous managed
+files from a temporary backup. If rollback itself fails (for example, because
+of filesystem failure), the exception identifies retained recovery files; do not
+delete them until recovery is complete. A returned index path indicates success.
+Updating multiple files is not a crash-atomic transaction: do not read or write
+the same bundle concurrently, and use separate run directories when historical
+results or recovery after forced termination/power loss are required. Unrelated
+files are never backed up, replaced or removed by an export.
 
 `color` must match the detector's processing grid, after resizing and cropping,
 not the uncropped camera image. Set `color_order="BGR"` for OpenCV input.
