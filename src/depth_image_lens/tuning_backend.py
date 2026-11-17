@@ -89,16 +89,17 @@ class PreparedInput:
     transform: dict
     intrinsics: object = None
 
-    def to_source_xy(self, points):
-        """Map cropped grid pixel centres to source continuous pixel coordinates."""
+    def to_source_xy(self, points, role=None):
+        """Map pixel centres to a source role (depth by default when supplied)."""
         p = np.asarray(points, float)
         x, y, _, _ = self.transform['crop']
-        scale = self.transform['scale']
+        scale = (self.transform['scale'] if role is None else
+                 self.transform['sources'][role]['scale'])
         return (p + [x, y] + .5) / scale - .5
 
 
 def prepare_inputs(arrays, crop=(0, 0, 640, 400), intrinsics=None):
-    """All provided arrays must already be registered on one common source grid.
+    """Inputs must describe the same registered field of view at either resolution.
 
     Resize first, then crop in normalized 640x400 coordinates. Depth values and
     invalid sentinels are never scaled or interpolated. RGB uses area reduction;
@@ -108,18 +109,18 @@ def prepare_inputs(arrays, crop=(0, 0, 640, 400), intrinsics=None):
     arrays = {k: np.asarray(v) for k, v in arrays.items() if v is not None}
     if not arrays or arrays.keys() - set(ARRAY_ROLES):
         raise ValueError('known, nonempty input arrays required')
-    shape = next(iter(arrays.values())).shape[:2]
-    if shape not in ((400, 640), (800, 1280)):
-        raise ValueError('input must be 640x400 or 1280x800')
     if len(crop) != 4 or any(type(v) is not int for v in crop):
         raise ValueError('crop must be four integers: x, y, width, height')
     x, y, w, h = crop
     if x < 0 or y < 0 or w < 2 or h < 2 or x+w > 640 or y+h > 400:
         raise ValueError('crop must fit 640x400 with width and height >=2')
     out = {}
+    sources = {}
     for key, value in arrays.items():
-        if value.shape[:2] != shape:
-            raise ValueError('all input arrays must share a registered grid')
+        shape = value.shape[:2]
+        if shape not in ((400, 640), (800, 1280)):
+            raise ValueError(f'{key}: input must be 640x400 or 1280x800')
+        sources[key] = dict(source_shape=list(shape), scale=640 / shape[1])
         color = 'color' in key
         if color and (value.dtype != np.uint8 or value.shape != (*shape, 3)):
             raise ValueError('color arrays must be uint8 RGB HxWx3')
@@ -137,14 +138,20 @@ def prepare_inputs(arrays, crop=(0, 0, 640, 400), intrinsics=None):
                 # (OpenCV INTER_NEAREST_EXACT convention), preserving every dtype.
                 value = value[::2, ::2]
         out[key] = value[y:y+h, x:x+w].copy()
-    scale = 640 / shape[1]
+    # Intrinsics describe the current depth grid, not whichever dict key came first.
+    source_role = next((key for key in ('depth', 'color', 'background_depth',
+                       'background_color') if key in arrays), next(iter(arrays)))
+    shape = sources[source_role]['source_shape']
+    scale = sources[source_role]['scale']
     if intrinsics is not None:
         if isinstance(intrinsics, dict):
             intrinsics = CameraIntrinsics(**intrinsics)
         intrinsics = CameraIntrinsics(intrinsics.fx*scale, intrinsics.fy*scale,
             (intrinsics.cx+.5)*scale-.5-x, (intrinsics.cy+.5)*scale-.5-y)
     return PreparedInput(out, dict(source_shape=list(shape), normalized_shape=[400, 640],
-        crop=list(crop), scale=scale, coordinates='cropped pixel centres; x right, y down'), intrinsics)
+        crop=list(crop), scale=scale, source_role=source_role, sources=sources,
+        registration_assumption='same registered field of view; resizing does not perform registration',
+        coordinates='cropped pixel centres; x right, y down'), intrinsics)
 
 
 @dataclass

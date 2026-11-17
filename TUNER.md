@@ -60,15 +60,17 @@ These choices avoid corrupting an in-progress native-library call or file write.
 
 ## Input grid and units
 
-A sample must use one common input grid: **640 x 400** or **1280 x 800**. All
-supplied color, depth, background and mask arrays must have that same shape.
+Each supplied array must be **640 x 400** or **1280 x 800**. These resolutions
+may be mixed: for example, 1280 x 800 color with 640 x 400 depth. Current and
+background color/depth, masks and ground truth are normalized independently.
+All inputs must already describe the same registered field of view.
 Color arrays are RGB `uint8`. Color files are decoded to RGB. Depth is optical-axis
 camera Z, not distance along a ray, and requires a declared `depth_scale_m`:
 `0.001` for integer millimetres, `1.0` for metre values.
 
 Preprocessing has a fixed order:
 
-1. Normalize the entire sample to 640 x 400. Color uses area reduction. Depth and
+1. Normalize each input independently to 640 x 400. Color uses area reduction. Depth and
    masks use nearest pixel-centre samples, preserving stored values and invalid
    depth values rather than averaging across an edge.
 2. Apply `crop = [x, y, width, height]` in that normalized grid. The bounds are
@@ -83,10 +85,15 @@ must already have matching views and alignment; matching array shapes cannot
 verify registration. Resampling also cannot create missing sensor evidence.
 
 Output coordinates use the cropped grid. The saved transform records source
-shape, scale and crop. The backend's `PreparedInput.to_source_xy()` maps continuous
-pixel-centre coordinates back to the original source image. If source camera
-intrinsics are supplied to the backend, focal lengths and principal point are
+shape, scale and crop for each input role. `PreparedInput.to_source_xy(points,
+role="color")` maps pixel centres to that original image. Without a role it uses
+the current depth grid when available, otherwise color (then a background or the
+first available input). Camera intrinsics must describe that same default source
+grid, normally the current depth image, not the larger color image. They are
 scaled using the same pixel-centre convention, then adjusted for the crop.
+This is resampling only: unregistered sensors or different crops/fields of view
+need calibration and registration before loading. Matching dimensions cannot
+verify alignment.
 
 ## Pipeline and interpretation
 
@@ -205,8 +212,9 @@ For an NPZ containing multiple arrays, a manifest entry can select a key:
 pickle. Masks are boolean/nonzero arrays. Depth files must be lossless PNG, NPY
 or NPZ; never use JPEG for depth. Manifest samples can additionally supply
 `observed_mask` and `exclusion_mask`; the latter currently applies to counter
-filtering only. A sample's optional `intrinsics` object has source-grid
-`fx`, `fy`, `cx` and `cy` for metric outline measurements.
+filtering only. A sample's optional `intrinsics` object has default-source-grid
+`fx`, `fy`, `cx` and `cy` for metric outline measurements (the current depth grid
+when supplied, as described above).
 
 Results appear as a structured summary. **Apply best** explicitly applies the
 winning training configuration; validation results do not choose the winner.

@@ -201,6 +201,9 @@ class TunerWindow(QtWidgets.QMainWindow):
         left = QtWidgets.QWidget()
         form = QtWidgets.QVBoxLayout(left)
         form.addWidget(QtWidgets.QLabel('INPUTS · already registered RGB / depth'))
+        hint = QtWidgets.QLabel('640×400 / 1280×800 may be mixed. Same aligned view required; resizing is not registration.')
+        hint.setWordWrap(True)
+        form.addWidget(hint)
         self.path_labels = {}
         for role in ('color', 'depth', 'background_color', 'background_depth', 'mask'):
             row = QtWidgets.QHBoxLayout()
