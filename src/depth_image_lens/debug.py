@@ -131,6 +131,11 @@ class DebugResultMixin:
             canvas=out
         return canvas if color_order=='RGB' else np.ascontiguousarray(canvas[...,::-1])
 
+    def save_debug_bundle(self, directory, color=None, **options):
+        """Save comprehensive paged diagnostics; existing compact rendering is unchanged."""
+        from .debug_bundle import save_debug_bundle
+        return save_debug_bundle(self, directory, color, **options)
+
     def save_debug(self,path,color=None,*,color_order='RGB',overwrite=False,**options):
         if type(overwrite) is not bool:raise ValueError('overwrite must be bool')
         dest=Path(path)

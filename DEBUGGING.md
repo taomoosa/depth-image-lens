@@ -179,3 +179,15 @@ These are visible-shape observations, not proof of physical holding or tension. 
 `depth-image-lens` uses the same `depth_image_lens.diagnostics.save_debug(result, output)` function as `examples/example_debug.py`; there is one diagnostic writer. It accepts separate NPY inputs or a numeric NPZ pair through the CLI described in [README.md](README.md). Result JSON never expands masks by default and is serialized with `allow_nan=False`. Only diagnostic arrays are saved in the NPZ; original depth files are not copied. Generated files contain no source paths or arbitrary config metadata.
 
 Continuity diagnostics: the search panel additionally displays `inferred_gap_mask` in yellow and `depth_rejected_mask` in pink. Yellow is explicitly inferred connectivity through known non-foreground pixels, not observed foreground or hole filling. JSON `auto.candidate_evaluations` explains the bounded candidate ranking and rejected depth paths. Sag dots continue to show observed envelope samples only.
+
+## Full paged PNG diagnostics
+
+For all acquired spatial diagnostics instead of the compact overview, call
+`result.save_debug_bundle("new-debug-run", color, columns=6, max_rows=4,
+tile_width=640)`. Enable `diagnostics=True` during detection to retain detailed
+maps. Pages contain up to 24 panels; model-specific maps and independent rejection
+conditions are grouped rather than exported as many individual images. See
+[FULL_DEBUG.md](FULL_DEBUG.md) and
+[the runnable example](examples/example_full_debug.py) for layout options, the
+index format, safety checks and interpretation limits. Compact `render_debug()`
+and `save_debug()` are unchanged.
