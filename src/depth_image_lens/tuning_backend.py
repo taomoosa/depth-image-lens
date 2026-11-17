@@ -16,7 +16,7 @@ from .geometry import CameraIntrinsics
 STAGES = {'segmenter': RGBDBackgroundSegmenter, 'repair': cleanup_mask,
           'counter': OverheadObjectCounter, 'outline': OuterContourDetector}
 MODES = ('union', 'depth_required', 'evidence', 'color_seeded', 'depth_anchored',
-         'color_supported', 'color_region', 'color_local', 'color_model')
+         'color_supported', 'color_region', 'color_local', 'color_model', 'color_first')
 ARRAY_ROLES = ('color', 'background_color', 'depth', 'background_depth', 'mask',
                'observed_mask', 'exclusion_mask', 'ground_truth_mask')
 

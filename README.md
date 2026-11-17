@@ -210,3 +210,5 @@ are ignored by Git.
 
 Original project code is licensed under [MIT](LICENSE). NumPy and optional OpenCV
 are external dependencies under their own licenses and are not bundled here.
+
+For thin objects without strong per-pixel depth seeds, see the opt-in [color-first region evidence](RGBD_COLOR_FIRST.md) mode and its conservative unknown/false-positive limits.

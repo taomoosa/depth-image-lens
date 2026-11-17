@@ -8,6 +8,7 @@ from .geometry import bool_mask
 from ._rgbd_fusion import (evidence_fusion, color_seeded_fusion, DECISION_REASONS,
                            SEEDED_DECISION_REASONS, depth_anchored_fusion, ANCHORED_DECISION_REASONS)
 
+from ._rgbd_color_first import color_first_fusion, FIRST_DECISION_REASONS
 from ._rgbd_color_model import color_model_fusion, MODEL_DECISION_REASONS, MODEL_REJECTION_FLAGS, render_model_rejection_maps
 from ._rgbd_debug import detailed_fusion_diagnostics
 from ._rgbd_color_local import color_local_fusion, LOCAL_DECISION_REASONS
@@ -116,6 +117,11 @@ class RGBDBackgroundResult(DebugResultMixin):
                           '2: strong depth seed', '3: unsupported color (unresolved)',
                           '4: unsupported depth', '5: unresolved local evidence',
                           '6: area filtered', '7: seed-color growth (uncertain)']
+            elif self.parameters['fusion_mode'] == 'color_first':
+                labels = ['0: no color candidate', '1: region supported + raw depth',
+                          '2: unused', '3: insufficient depth separation',
+                          '4: unselected raw depth', '5: insufficient region/surround',
+                          '6: area filtered', '7: thin region inference (uncertain)']
             elif self.parameters['fusion_mode'] == 'color_model':
                 labels = ['0: no candidate / unavailable', '1: depth model training pixel',
                           '2: unused', '3: color rejected / disconnected',
@@ -203,9 +209,14 @@ class RGBDBackgroundSegmenter:
                  model_reject_farther=True, model_farther_threshold_m=None,
                  model_boundary_radius_px=6, model_min_training_pixels=8,
                  model_max_colors=6, model_min_color_fraction=.03, model_max_regions=32,
-                 model_training_policy="legacy", model_training_inset_px=2):
-        if fusion_mode not in ('union', 'depth_required', 'evidence', 'color_seeded', 'depth_anchored', 'color_supported', 'color_region', 'color_local', 'color_model'):
-            raise ValueError('fusion_mode must be union, depth_required, evidence, color_seeded, depth_anchored, color_supported, color_region, color_local or color_model')
+                 model_training_policy="legacy", model_training_inset_px=2,
+                 first_min_depth_delta_m=.00075, first_noise_multiplier=2.5,
+                 first_block_size_px=8, first_min_blocks=4,
+                 first_ring_radius_px=16, first_ring_gap_px=3,
+                 first_min_valid_fraction=.6, first_min_area=64,
+                 first_color_relaxation_ratio=.2, first_min_block_fraction=.75):
+        if fusion_mode not in ('union', 'depth_required', 'evidence', 'color_seeded', 'depth_anchored', 'color_supported', 'color_region', 'color_local', 'color_model', 'color_first'):
+            raise ValueError('fusion_mode must be union, depth_required, evidence, color_seeded, depth_anchored, color_supported, color_region, color_local, color_model or color_first')
         for key, value, lower, upper in (('anchored_refine_radius_px', anchored_refine_radius_px, 0, 20),
                                           ('anchored_iterations', anchored_iterations, 1, 100),
                                           ('supported_growth_radius_px', supported_growth_radius_px, 0, 20)):
@@ -227,6 +238,11 @@ class RGBDBackgroundSegmenter:
         if type(background_compensate) is not bool:
             raise ValueError('background_compensate must be bool')
         for key, value, lower, upper in (
+                ('first_block_size_px', first_block_size_px, 2, 64),
+                ('first_min_blocks', first_min_blocks, 2, 10000),
+                ('first_min_area', first_min_area, 1, 1000000),
+                ('first_ring_radius_px', first_ring_radius_px, 1, 128),
+                ('first_ring_gap_px', first_ring_gap_px, 0, 127),
                 ('local_support_radius_px', local_support_radius_px, 1, 10),
                 ('local_growth_radius_px', local_growth_radius_px, 0, 20),
                 ('local_seed_min_area', local_seed_min_area, 1, 1000000),
@@ -262,7 +278,14 @@ class RGBDBackgroundSegmenter:
             if not np.isfinite(model_farther_threshold_m) or model_farther_threshold_m <= 0:
                 raise ValueError('model_farther_threshold_m must be positive finite or None')
         split_model_metric = model_luma_tolerance is not None or model_chroma_tolerance is not None
-        numeric = dict(model_color_tolerance=model_color_tolerance,
+        if first_ring_gap_px >= first_ring_radius_px:
+            raise ValueError('require first_ring_gap_px < first_ring_radius_px')
+        numeric = dict(first_min_depth_delta_m=first_min_depth_delta_m,
+                       first_noise_multiplier=first_noise_multiplier,
+                       first_min_valid_fraction=first_min_valid_fraction,
+                       first_color_relaxation_ratio=first_color_relaxation_ratio,
+                       first_min_block_fraction=first_min_block_fraction,
+                       model_color_tolerance=model_color_tolerance,
                        model_luma_tolerance=(model_color_tolerance if model_luma_tolerance is None else model_luma_tolerance),
                        model_chroma_tolerance=(model_color_tolerance if model_chroma_tolerance is None else model_chroma_tolerance),
                        model_background_margin=model_background_margin,
@@ -301,11 +324,11 @@ class RGBDBackgroundSegmenter:
                 raise ValueError(f'{key} must be a finite number') from exc
             if not np.isfinite(numeric[key]) or (numeric[key] < 0 and key != 'model_background_margin'):
                 raise ValueError(f'{key} must be finite and nonnegative')
-        for key in ('background_chroma_tolerance', 'background_luma_tolerance',
+        for key in ('first_min_depth_delta_m', 'background_chroma_tolerance', 'background_luma_tolerance',
                     'depth_threshold_m', 'background_check_p95', 'background_max_offset'):
             if numeric[key] <= 0:
                 raise ValueError(f'{key} must be positive')
-        for key in ('local_min_depth_fraction', 'local_min_valid_fraction', 'local_color_relaxation_ratio'):
+        for key in ('first_min_valid_fraction', 'first_color_relaxation_ratio', 'first_min_block_fraction', 'local_min_depth_fraction', 'local_min_valid_fraction', 'local_color_relaxation_ratio'):
             if not 0 < numeric[key] <= 1:
                 raise ValueError(f'{key} must be in (0,1]')
         if not 0 < numeric['model_min_color_fraction'] <= 1:
@@ -353,7 +376,9 @@ class RGBDBackgroundSegmenter:
             raise ValueError('depth_support_fraction must be in (0,1]')
         if not 0 < numeric['color_relaxation_ratio'] <= 1:
             raise ValueError('color_relaxation_ratio must be in (0,1]')
-        self.parameters = dict(numeric, model_training_policy=model_training_policy,
+        self.parameters = dict(numeric, first_block_size_px=first_block_size_px,
+                               first_min_blocks=first_min_blocks, first_min_area=first_min_area,
+                               first_ring_radius_px=first_ring_radius_px, first_ring_gap_px=first_ring_gap_px, model_training_policy=model_training_policy,
                                model_training_inset_px=model_training_inset_px,
                                model_reject_farther=model_reject_farther,
                                model_farther_threshold_m=model_farther_threshold_m, fusion_mode=fusion_mode, missing_depth_policy=missing_depth_policy,
@@ -440,7 +465,8 @@ class RGBDBackgroundSegmenter:
             color_fg[:] = False
             color_uncertain[:] = True
             color_info.pop('fallback', None)
-            color_info['selection_action'] = ('disable_color_require_strong_supported_depth'
+            color_info['selection_action'] = ('disable_color_no_candidates'
+                if p['fusion_mode'] == 'color_first' else 'disable_color_require_strong_supported_depth'
                 if p['fusion_mode'] == 'evidence' else 'disable_color_no_seeds'
                 if p['fusion_mode'] == 'color_seeded' else 'disable_reference_difference_keep_current_rgb_edges'
                 if p['fusion_mode'] == 'depth_anchored' else 'disable_color_evidence_keep_depth')
@@ -493,6 +519,14 @@ class RGBDBackgroundSegmenter:
             observed = valid.copy()
             uncertain |= fusion_debug['unknown_mask']
             fusion_debug['unknown_mask'] = uncertain.copy()
+        elif p['fusion_mode'] == 'color_first':
+            obj, suppressed, deferred, fusion_debug = color_first_fusion(
+                delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
+                lab, current_color_valid & roi, color_debug, valid, roi, p, diagnostics=diagnostics)
+            observed = valid.copy()
+            uncertain |= fusion_debug['unknown_mask']
+            fusion_debug['unknown_mask'] = uncertain.copy()
+            fusion_debug['confident_foreground_mask'] &= ~uncertain
         elif p['fusion_mode'] == 'color_model':
             obj, suppressed, deferred, fusion_debug = color_model_fusion(
                 delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
@@ -541,7 +575,7 @@ class RGBDBackgroundSegmenter:
         if p['fusion_mode'] == 'color_supported':
             for key in ('supported_seed_mask', 'color_seed_mask', 'depth_seed_mask'):
                 fusion_debug[key] &= ~filtered
-        if p['fusion_mode'] in ('depth_anchored', 'color_supported', 'color_region', 'color_local', 'color_model'):
+        if p['fusion_mode'] in ('depth_anchored', 'color_supported', 'color_region', 'color_local', 'color_model', 'color_first'):
             fusion_debug['inferred_foreground_mask'] &= ~filtered
             fusion_debug['confident_foreground_mask'] &= ~filtered
             fusion_debug['unknown_mask'] |= filtered
@@ -558,6 +592,7 @@ class RGBDBackgroundSegmenter:
                                         'color_supported': 'depth_validated_seeds_and_bounded_local_seed_color_growth',
                                         'color_region': 'connected_full_lab_regions_with_clipped_mean_and_depth_density',
                                         'color_local': 'color_weighted_local_signed_depth_and_bounded_seed_color_growth',
+                                        'color_first': 'color_first_regions_versus_surround_signed_depth_blocks',
                                         'color_model': 'fixed_seed_region_color_models_competing_with_background_in_bounded_band'}[p['fusion_mode']],
                                   warnings=['alignment_and_empty_reference_are_caller_assumptions',
                                             'color_only_change_can_be_shadow_or_thin_object',
@@ -568,8 +603,9 @@ class RGBDBackgroundSegmenter:
                        observed_pixels=int(observed.sum()), color_foreground_pixels=int(color_fg.sum()),
                        depth_foreground_pixels=int(depth_fg.sum()), conflict_pixels=int(conflict.sum()),
                        filtered_pixels=int(filtered.sum()))
-        if p['fusion_mode'] in ('evidence', 'color_seeded', 'depth_anchored', 'color_supported', 'color_region', 'color_local', 'color_model'):
-            reasons = (MODEL_DECISION_REASONS if p['fusion_mode'] == 'color_model' else
+        if p['fusion_mode'] in ('evidence', 'color_seeded', 'depth_anchored', 'color_supported', 'color_region', 'color_local', 'color_model', 'color_first'):
+            reasons = (FIRST_DECISION_REASONS if p['fusion_mode'] == 'color_first' else
+                       MODEL_DECISION_REASONS if p['fusion_mode'] == 'color_model' else
                        LOCAL_DECISION_REASONS if p['fusion_mode'] == 'color_local' else
                        REGION_DECISION_REASONS if p['fusion_mode'] == 'color_region' else
                        SUPPORTED_DECISION_REASONS if p['fusion_mode'] == 'color_supported' else
@@ -658,6 +694,16 @@ class RGBDBackgroundSegmenter:
                 'fixed_color_prototypes_can_split_gradients_and_thin_regions']
             metrics['color_region_count'] = len(fusion_debug['region_statistics'])
             metrics['color_region_budget_exceeded'] = fusion_debug['region_color_budget_exceeded']
+        if p['fusion_mode'] == 'color_first':
+            stages['fusion']['regions'] = fusion_debug['first_statistics']
+            stages['fusion']['warnings'] += [
+                'block_spread_is_not_calibrated_significance_or_independent_samples',
+                'region_local_depth_bias_can_be_indistinguishable_from_a_thin_object',
+                'missing_surround_or_interior_is_unknown_not_background',
+                'same_color_touching_shadows_can_join_a_supported_region',
+                'median_gate_misses_objects_with_most_depth_deltas_quantized_to_zero']
+            metrics['color_first_region_count'] = len(fusion_debug['first_statistics'])
+            metrics['color_first_budget_exceeded'] = fusion_debug['first_color_budget_exceeded']
         debug = {}
         if diagnostics:
             debug = dict(color_debug, **fusion_debug, depth_difference_m=delta, color_usable_mask=color_usable,

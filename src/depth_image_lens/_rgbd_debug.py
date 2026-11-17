@@ -119,6 +119,22 @@ def detailed_fusion_diagnostics(debug, p, roi, valid, color_fg, depth_fg,
                 'region_fail_observed_mask': 'Assigned region has no observed depth samples.',
                 'region_pass_observed_mask': 'Assigned region has at least one observed depth sample.'}.items():
             meta[name] = dict(description=description)
+    if mode == 'color_first':
+        for key, description in {
+            'first_candidate_mask': 'Color-first candidates before any depth gate; uses first_color_relaxation_ratio.',
+            'first_interior_mask': 'Eroded candidate interiors used for signed depth statistics; not final boundary erosion.',
+            'first_surround_mask': 'Union of per-region reference rings; excludes every changed-color candidate.',
+            'first_insufficient_mask': 'Insufficient region or surrounding-reference evidence; remains unknown.',
+            'first_upper_excluded_mask': 'Depth exceeds local_max_reference_separation_m; never included.',
+        }.items():
+            meta[key] = dict(kind='mask', description=description)
+        for key in debug:
+            if key.startswith('first_failed_'):
+                meta[key] = dict(kind='overlapping_condition', description='Region gate failed: '+key[13:-5]+'. Other conditions may also fail. Unevaluated depth gates are not failures.')
+        for key in ('first_mean_delta_m', 'first_median_delta_m', 'first_required_delta_m'):
+            meta[key] = dict(kind='numeric', unit='m', description='Region minus surrounding table signed depth statistic, or required separation. NaN = insufficient evidence.')
+        meta['first_color_group_map'] = dict(kind='label', description='Color prototype groups; matches color_group in first_statistics. One group can contain multiple disconnected regions.')
+        meta['first_region_label_map'] = dict(kind='label', description='Connected-region labels; matches id in first_statistics. Zero means unassigned.')
     out['diagnostic_metadata'] = meta
     return out
 

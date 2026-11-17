@@ -1,0 +1,130 @@
+"""Color-first candidates with conservative region-versus-surround depth evidence.
+
+Block statistics are robustness heuristics, NOT independent samples, p-values,
+or calibrated confidence. A bias confined to an object-colored region remains
+indistinguishable from a shallow object in a single RGB-D observation.
+"""
+import numpy as np
+from .debug import _opencv
+
+FIRST_DECISION_REASONS = {
+    0: 'no_color_candidate', 1: 'region_supported_observed_foreground',
+    3: 'region_not_separated_from_surround_depth', 4: 'raw_depth_outside_color_selection',
+    5: 'insufficient_region_or_surround_evidence', 6: 'removed_by_min_object_area',
+    7: 'region_supported_thin_foreground_inference',
+}
+
+
+def _summary(values):
+    if not len(values):
+        return dict(mean_m=None, median_m=None, q10_m=None, q90_m=None)
+    return dict(mean_m=float(np.mean(values)), median_m=float(np.median(values)),
+                q10_m=float(np.quantile(values, .1)), q90_m=float(np.quantile(values, .9)))
+
+
+def _blocks(mask, valid, delta, size, coverage):
+    """At least half a block's footprint, then adequate valid coverage.
+
+    Partial boundary blocks do not count as independent strong evidence. Depth
+    means include signed values, not only positive threshold crossings.
+    """
+    yy, xx = np.nonzero(mask)
+    if not len(yy):
+        return np.empty(0)
+    ids = (yy // size) * ((mask.shape[1] + size - 1)//size) + xx // size
+    groups, inv, count = np.unique(ids, return_inverse=True, return_counts=True)
+    seen = valid[yy, xx]
+    n = np.bincount(inv, weights=seen, minlength=len(groups))
+    sums = np.bincount(inv, weights=np.where(seen, delta[yy, xx], 0.), minlength=len(groups))
+    ok = (count >= max(4, size*size//2)) & (n >= count*coverage)
+    return sums[ok] / n[ok]
+
+
+def color_first_fusion(delta, depth_fg, farther, color_fg, color_usable,
+                       color_uncertain, lab, edge_valid, color_debug, valid,
+                       roi, parameters, *, diagnostics=False):
+    p = parameters; cv = _opencv(); shape = valid.shape
+    usable = roi & color_usable & edge_valid & ~color_debug['background_photometric_clipped_mask']
+    candidate = usable & (color_debug['background_combined_score'] > p['first_color_relaxation_ratio']**2)
+    upper = np.zeros(shape, bool)
+    if p['local_max_reference_separation_m'] is not None:
+        upper = valid & (delta > p['local_max_reference_separation_m'])
+    # Candidate definition is independent of depth. Upper/invalid pixels must
+    # not silently disappear from the statistical coverage denominator.
+    sample_valid = valid & ~upper
+    clipped = np.clip(np.where(valid, delta, 0.), -p['local_depth_clip_m'], p['local_depth_clip_m'])
+    scales = np.array([1/p['model_luma_tolerance'], 1/p['model_chroma_tolerance'], 1/p['model_chroma_tolerance']])
+    color_ids = np.zeros(shape, np.int32)
+    if candidate.any():
+        colors, inverse, counts = np.unique(lab[candidate], axis=0, return_inverse=True, return_counts=True)
+        assignment = np.zeros(len(colors), np.int32)
+        # Fixed prototypes avoid transitive drift across a smooth shadow.
+        for group in range(1, p['region_max_color_groups']+1):
+            remaining = assignment == 0
+            if not remaining.any(): break
+            seed = int(np.argmax(np.where(remaining, counts, 0)))
+            assignment[remaining & (np.linalg.norm((colors-colors[seed])*scales, axis=1) <= 1)] = group
+        color_ids[candidate] = assignment[inverse]
+    selected = np.zeros(shape, bool); interiors = selected.copy(); rings = selected.copy()
+    labels_out = np.zeros(shape, np.int32); records = []
+    insufficient = candidate & (color_ids == 0)
+    failure_masks = {name: np.zeros(shape, bool) for name in ('area','interior','region_coverage','surround_coverage','region_blocks','surround_blocks','mean_delta','median_delta','block_fraction')}
+    mean_map = np.full(shape, np.nan); median_map = mean_map.copy(); threshold_map = mean_map.copy()
+    next_id = 0
+    for group in range(1, int(color_ids.max())+1):
+        count, labels, boxes, _ = cv.connectedComponentsWithStats((color_ids == group).astype(np.uint8), connectivity=8)
+        for label in range(1, count):
+            next_id += 1
+            area = int(boxes[label, cv.CC_STAT_AREA])
+            x,y,w,h = boxes[label,:4]
+            sl = np.s_[y:y+h,x:x+w]
+            piece = labels[sl] == label
+            labels_out[sl][piece] = next_id
+            if area < p['first_min_area']:
+                failure_masks['area'][sl][piece] = True; insufficient[sl][piece] = True
+                records.append(dict(id=next_id,color_group=group,area=area,accepted=False,failures=['area']))
+                continue
+            part = labels == label
+            inset = p['model_training_inset_px']
+            interior = cv.erode(part.astype(np.uint8), np.ones((2*inset+1,2*inset+1),np.uint8), borderType=cv.BORDER_CONSTANT, borderValue=1).astype(bool)
+            # Exclude ALL changed colors from the reference ring, not just this
+            # group. Nearby objects/shadows cannot serve as trusted table.
+            radius = p['first_ring_radius_px']; gap = p['first_ring_gap_px']
+            ring = cv.dilate(part.astype(np.uint8), np.ones((2*radius+1,2*radius+1),np.uint8)).astype(bool)
+            near = cv.dilate(part.astype(np.uint8), np.ones((2*gap+1,2*gap+1),np.uint8)).astype(bool)
+            ring &= ~near & usable & ~candidate
+            interiors |= interior; rings |= ring
+            iv = interior & sample_valid; rv = ring & sample_valid
+            ic = float(iv.sum()/max(1,interior.sum())); rc = float(rv.sum()/max(1,ring.sum()))
+            ib = _blocks(interior,sample_valid,clipped,p['first_block_size_px'],p['first_min_valid_fraction'])
+            rb = _blocks(ring,sample_valid,clipped,p['first_block_size_px'],p['first_min_valid_fraction'])
+            region = _summary(clipped[iv]); surround = _summary(clipped[rv])
+            gates = dict(area=True,interior=bool(interior.any()),region_coverage=ic>=p['first_min_valid_fraction'],surround_coverage=rc>=p['first_min_valid_fraction'],region_blocks=len(ib)>=p['first_min_blocks'],surround_blocks=len(rb)>=p['first_min_blocks'])
+            enough = all(gates.values())
+            mean_delta = median_delta = required = fraction = None
+            if enough:
+                mean_delta = region['mean_m']-surround['mean_m']
+                median_delta = region['median_m']-surround['median_m']
+                # Use reference block spread without dividing by sqrt(N).
+                # Large images do not turn correlated table bias into certainty.
+                noise = float(np.quantile(np.abs(rb-np.median(rb)), .9))
+                required = p['first_min_depth_delta_m'] + p['first_noise_multiplier']*noise
+                fraction = float(np.mean(ib-np.median(rb) >= required))
+                gates.update(mean_delta=mean_delta>=required,median_delta=median_delta>=required,block_fraction=fraction>=p['first_min_block_fraction'])
+                mean_map[part]=mean_delta; median_map[part]=median_delta; threshold_map[part]=required
+            else:
+                insufficient |= part
+            accepted = enough and all(gates.values())
+            if accepted: selected |= part & sample_valid
+            for name, passed in gates.items():
+                if not passed: failure_masks[name] |= part
+            records.append(dict(id=next_id,color_group=group,area=area,interior_area=int(interior.sum()),surround_area=int(ring.sum()),region_valid_fraction=ic,surround_valid_fraction=rc,region_blocks=len(ib),surround_blocks=len(rb),region=region,surround=surround,mean_delta_m=mean_delta,median_delta_m=median_delta,required_delta_m=required,supported_block_fraction=fraction,accepted=accepted,failures=[k for k,v in gates.items() if not v]))
+    inferred = selected & ~depth_fg
+    suppressed = depth_fg & ~selected
+    deferred = candidate & ~selected & ~suppressed
+    decision = np.zeros(shape,np.uint8); decision[deferred]=3; decision[suppressed]=4; decision[insufficient | (candidate & ~sample_valid)]=5; decision[selected & depth_fg]=1; decision[inferred]=7
+    unknown = roi & (~valid | ~usable | inferred | suppressed | deferred | upper)
+    debug = dict(fusion_decision=decision,first_candidate_mask=candidate,first_color_group_map=color_ids,first_region_label_map=labels_out,first_interior_mask=interiors,first_surround_mask=rings,first_upper_excluded_mask=upper,first_insufficient_mask=insufficient,first_mean_delta_m=mean_map,first_median_delta_m=median_map,first_required_delta_m=threshold_map,first_statistics=records,first_color_budget_exceeded=bool((candidate & (color_ids==0)).any()),accepted_both_mask=selected & depth_fg,accepted_depth_only_mask=np.zeros(shape,bool),accepted_color_only_mask=np.zeros(shape,bool),accepted_growth_mask=inferred,inferred_foreground_mask=inferred,confident_foreground_mask=selected & depth_fg & ~color_uncertain,confident_background_mask=np.zeros(shape,bool),unknown_mask=unknown)
+    if diagnostics:
+        debug.update({f'first_failed_{key}_mask': value for key,value in failure_masks.items()})
+    return selected,suppressed,deferred,debug

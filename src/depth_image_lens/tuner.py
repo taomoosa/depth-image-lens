@@ -226,7 +226,7 @@ class TunerWindow(QtWidgets.QMainWindow):
         choices = QtWidgets.QHBoxLayout()
         self.source = QtWidgets.QComboBox(); self.source.addItems(['segmenter','mask'])
         self.target = QtWidgets.QComboBox(); self.target.addItems(['mask','count','outline'])
-        self.mode = QtWidgets.QComboBox(); self.mode.addItems(['union','depth_required','evidence','color_seeded','depth_anchored','color_supported','color_region','color_local','color_model'])
+        self.mode = QtWidgets.QComboBox(); self.mode.addItems(['union','depth_required','evidence','color_seeded','depth_anchored','color_supported','color_region','color_local','color_model','color_first'])
         for w in (self.source,self.target,self.mode):
             choices.addWidget(w); w.currentTextChanged.connect(self.options_changed)
         form.addLayout(choices)

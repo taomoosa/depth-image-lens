@@ -37,3 +37,5 @@ exclude examples/benchmark_*.py examples/compare_*.py examples/evaluate_*.py exa
 exclude tests/compare_*.py
 
 include HANGING_PROFILE.md
+
+include RGBD_COLOR_FIRST.md

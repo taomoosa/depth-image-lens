@@ -99,7 +99,7 @@ verify alignment.
 
 The source is either `RGBDBackgroundSegmenter` or an externally provided mask.
 The segmenter supports `union`, `depth_required`, `evidence`, `color_seeded`,
-`depth_anchored`, `color_supported`, `color_region`, `color_local` and `color_model`.
+`depth_anchored`, `color_supported`, `color_region`, `color_local`, `color_model` and `color_first`.
 The optional repair step uses `cleanup_mask`. The target is the mask itself,
 `OverheadObjectCounter`, or `OuterContourDetector`.
 
@@ -292,3 +292,5 @@ The `model_training_input_mask` and `model_training_used_mask` panels show actua
 palette proposal/fit input, separately from the legacy final-selected training
 mask. Independent training failure panels and group statistics explain rejected
 colors without treating overlapping conditions as unique causal reasons.
+
+The opt-in `color_first` mode compares color-region interiors against nearby unchanged table depth. See [RGBD_COLOR_FIRST.md](RGBD_COLOR_FIRST.md) for its parameters and `first_*` diagnostic maps.
