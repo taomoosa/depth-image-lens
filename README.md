@@ -142,6 +142,7 @@ Use the guide for the evidence available in your application:
 | Visible overhead corner candidates | [Corners](CORNER.md) | `examples/example_corner.py` |
 | Color boundaries, depth steps and relative-depth islands | [Overhead boundaries](BOUNDARY.md) | `examples/example_boundary.py` |
 | Ordered exterior contours and length queries | [Outlines](OUTLINE.md) | `examples/example_outline.py` |
+| Whole visible-component inset independent of corner availability | [Component inset](OUTLINE.md#inset-a-whole-visible-component) | `examples/example_outline_inset.py` |
 | Open-reference to partial-exterior matching | [Outline matching](OUTLINE_MATCH.md), [corner-based matching](CORNER_OUTLINE_MATCH.md) | `examples/example_outline_match_sources.py` |
 | Current/empty RGB-D foreground masks | [Background segmentation](RGBD_BACKGROUND.md) | `examples/example_rgbd_background.py` |
 | Visible distinct-color deformable-object counts, from RGB-D or an existing mask | [Object counting](OBJECT_COUNT.md) | `examples/example_object_count.py`, `examples/example_object_count_mask.py` |

@@ -257,6 +257,78 @@ result records are not mutated, and the helper writes no files.
 Run `python examples/example_outline_interior.py --offset-px 10` for a synthetic
 L-shaped example with both convex and concave corners and separate raw/inward XY.
 
+## Inset a whole visible component
+
+Use `result.inset_component(offset_px, contour_id=None)` to inset the entire
+filled shape as a unit. This does not use the raw corner positions or their
+availability, and does not require a simple original outline. It returns a new
+`OuterContourInsetResult`; the original outline, sequence, statuses and corner
+offset queries are unchanged. It does not establish a one-to-one correspondence
+between original and inset vertices. Narrow connections may disappear, producing
+multiple valid parts instead of one polygon.
+
+```python
+result = OuterContourDetector().detect(mask, observed_mask=observed)
+inset = result.inset_component(4.0)
+print(inset.summary['status'], inset.summary['polygon_status'])
+for part in inset.components:  # do not discard smaller surviving parts
+    if part['polygon_status'] == 'simple':
+        outer_xy = part['outer']['points_xy']
+        holes_xy = [hole['points_xy'] for hole in part['holes']]
+    else:
+        print(part['id'], part['polygon_reasons'])
+# inset.inset_mask is always the authoritative occupancy grid, including splits.
+```
+
+An omitted contour ID selects the largest polygon-area contour, as in
+`resolve_sequence()`. Alternatively, pass an existing contour ID. Only that
+observed 8-connected component is inset. Other original components, including
+separate islands nested inside a hole, are not added; iterate over the original
+contour IDs to process them separately. Empty input yields a full-size all-False
+mask. Invalid distance or explicit IDs raise `ValueError`.
+
+**Distance rule.** With a finite nonnegative offset in processing-image pixels,
+retain each selected foreground pixel center whose Euclidean distance to the
+nearest excluded pixel center is strictly greater than the offset. The excluded
+set includes holes, other non-selected pixels, unobserved pixels and a zero pad
+outside the frame. At zero the selected visible component is unchanged; for
+offsets below 1 px, no pixel is removed. At exactly 1 px, direct foreground
+neighbors of excluded pixels are removed. Exact lattice thresholds below 1024 px
+avoid float32 equality rounding; very large offsets use OpenCV float32 distance
+resolution. This is a raster inset. It is not a continuous vector offset, a raw
+corner displacement, an image-center scaling, or a calibrated material distance.
+An unobserved cut can trim the result but does not establish a material edge.
+
+**Output.** `inset_mask` is a new full-size bool array, a subset of the selected
+visible component. `components` lists all surviving 8-connected parts, with
+separate result-local IDs. Each contains an `outer` ring, its current `holes`, a
+foreground pixel count, and polygon status/reasons. The rings give XY pixel
+centers without a repeated closing vertex (implicitly cyclic), clockwise for
+outer rings and counterclockwise for nondegenerate holes. Holes can grow, merge,
+or open to the outside. `to_dict()` returns a detached, JSON-compatible summary
+and ring records, without the mask.
+
+- `summary['status']` is `computed` for a single surviving raster component,
+  `split` for multiple parts, `collapsed` when the inset removed all of the
+  selected component, or `no_visible_component` when there was none to select.
+- `summary['polygon_status']` is `simple` if all parts' traced rings are simple
+  and disjoint within each part, `ambiguous` if a ring degenerates, touches or
+  crosses itself or another ring in its part, and `unavailable` if there are no
+  remaining pixels. A thin one-pixel run can be a valid mask but not a polygon.
+  Do not fill ambiguous traces as polygons; use the mask instead. Even simple
+  traced rings are pixel-center outlines, not an exact polygonization of the
+  occupied pixel squares. `area_px2` is the individual ring's enclosed area,
+  not the foreground count.
+- The summary retains `source_contour_status`, `source_contour_clipped`, and
+  `source_touches_unobserved_or_frame` (contact within the 8-neighborhood,
+  including at or beyond frame edges). A successful mask inset never clears
+  original uncertainty or guarantees safe physical use.
+
+Run `python examples/example_outline_inset.py --shape point-touch --offset-px 2`
+to inset two diagonally touching lobes. Both inset parts are returned even
+though the original outer contour is ambiguous. Add `--output-png inset.png`
+for a mask overlay, or use `--shape hole` to see the interior hole grow.
+
 ## Optional 3D lengths
 
 ```python

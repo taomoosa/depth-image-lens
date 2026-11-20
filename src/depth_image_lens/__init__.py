@@ -42,9 +42,9 @@ from .boundary import OverheadBoundaryDetector, BoundaryResult
 
 __all__ += ["OverheadBoundaryDetector", "BoundaryResult"]
 
-from .outline import OuterContourDetector, OuterContourResult
+from .outline import OuterContourDetector, OuterContourInsetResult, OuterContourResult
 
-__all__ += ["OuterContourDetector", "OuterContourResult"]
+__all__ += ["OuterContourDetector", "OuterContourInsetResult", "OuterContourResult"]
 
 from .boundary_proximity import BoundaryProximityResult
 

@@ -76,6 +76,18 @@ def _ranges(n,cuts):
 
 
 @dataclass(frozen=True)
+class OuterContourInsetResult:
+    """One selected component's inset mask and newly traced boundary records."""
+    inset_mask: np.ndarray = field(repr=False)
+    components: list
+    summary: dict
+
+    def to_dict(self):
+        """Return detached, JSON-compatible rings and summary, without the mask."""
+        return deepcopy(dict(components=self.components, summary=self.summary))
+
+
+@dataclass(frozen=True)
 class OuterContourResult(DebugResultMixin):
     contours: list
     holes: list
@@ -217,6 +229,20 @@ class OuterContourResult(DebugResultMixin):
         """
         from ._outline_interior import corner_interior_points
         return corner_interior_points(self, offset_px, contour_id)
+
+    def inset_component(self, offset_px, contour_id=None):
+        """Inset the whole selected observed component, including its holes.
+
+        None selects the largest polygon-area contour. The inset is independent
+        of source corner availability and contour classification. It retains
+        visible foreground pixel centers farther than offset_px from the padded
+        complement, measured by the OpenCV L2 distance transform. The inset mask
+        is authoritative; the result also traces every produced part and hole,
+        with separate split, collapse and ring diagnostics. No existing contour,
+        corner or ID is replaced, and no vertex correspondence is implied.
+        """
+        from ._outline_inset import inset_component
+        return inset_component(self, offset_px, contour_id)
 
     def query_edge_length(self,target_length,*,unit='px',tolerance=None,mode='match',
                           min_support_px=20.,max_line_error_px=None,max_metric_line_error_m=.005,require_corner_endpoints=False):
