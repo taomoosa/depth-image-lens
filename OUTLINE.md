@@ -175,6 +175,31 @@ The helpers do not change query_edge_length's scope: that query still searches a
 contours. To associate its intervals with a selected contour, filter the query records
 by contour_id. Neither helper changes detection, debug rendering, thresholds or IDs.
 
+## Intersect the largest outline with a perpendicular bisector
+
+Run this example with segment endpoints in image XY coordinates (X right, Y down):
+
+```bash
+python examples/example_outline_perpendicular_bisector.py --a 75 30 --b 75 70
+python examples/example_outline_perpendicular_bisector.py --mask object_mask.npy --a 75 30 --b 75 70
+```
+
+The example detects an outline from a bool HxW mask and selects
+`result.largest_contour()`. It intersects the infinite perpendicular bisector
+with the closed exterior `points_xy` polyline, not the detected corners or
+hole rings. The default concave mask produces four intersections. Each hit has
+floating-point `xy`, `signed_distance_px`, and absolute `distance_px` from the
+segment midpoint, all in the mask grid. Positive distance points along
+`(-dy, dx)` for `B - A = (dx, dy)`. Reversing the endpoints reverses the sign
+and output order, not the points or absolute distances.
+
+Repeated hits at a shared vertex are reported once. A collinear section has
+infinitely many hits, so its closed interval appears under `overlaps` with the
+two endpoint coordinates and distances, rather than as a list of point hits.
+A missed contour returns empty lists; an empty mask gives
+`status='no_visible_contour'`. Coincident endpoints are invalid. This measures
+the pixel-center outline, not physical distance or material-edge identity.
+
 ## Separate inward-offset corner positions
 
 `result.corner_interior_points(offset_px, contour_id=None)` computes separate
