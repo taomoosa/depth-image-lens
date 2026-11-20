@@ -52,7 +52,8 @@ sensor accuracy.
 | `first_noise_multiplier` | 2.5 | Extra margin from surrounding block spread. Lower increases sensitivity and false positives under correlated noise. Not a Gaussian sigma or confidence level. |
 | `first_min_block_fraction` | 0.75 | Required fraction of interior block means above the same relative threshold. |
 | `first_block_size_px` | 8 | Spatial aggregation scale. Only blocks with at least half their pixel footprint in the region and adequate valid depth contribute. |
-| `first_min_blocks` | 4 | Minimum usable interior AND surrounding blocks. Smaller values accept thinner/cropped regions with weaker evidence. |
+| `first_min_blocks` | 4 | Minimum usable interior blocks, and surrounding blocks when no surround override is set. |
+| `first_min_surround_blocks` | None | Optional surrounding minimum only; `None` inherits `first_min_blocks`. An integer in 1–10000 sets the surrounding count separately. `0` bypasses the count check, not the need for measured surrounding depth. |
 | `first_min_valid_fraction` | 0.6 | Required interior/reference coverage and within-block coverage. |
 | `first_min_area` | 64 | Minimum candidate component area. |
 | `first_ring_radius_px`, `first_ring_gap_px` | 16, 3 | Chebyshev ring extent and edge-contamination exclusion gap. Requires gap < radius. |
@@ -65,6 +66,30 @@ color compensation/validity settings, `local_depth_clip_m` (default 15 mm),
 `model_reject_farther`, local seed/density thresholds are **not used** here.
 Negative depth is retained in regional statistics instead of vetoing individual
 pixels. Choose the upper-depth limit for the scene if an elevated arm is present.
+
+### Sparse surrounding blocks
+
+If only `first_failed_surround_blocks_mask` is set for a region, keep the
+interior and depth settings unchanged and try `first_min_surround_blocks=3`
+or `1`, depending on the observed block count. Use `0` only if you want
+to evaluate a ring with no qualifying block but enough valid table depth, such
+as a thin reference strip that straddles the block grid. The setting changes
+only `color_first`.
+
+When the relaxed count passes with fewer than two usable surrounding blocks,
+the comparison uses the same valid, clipped signed ring pixels. Their median
+replaces the median of block means for the interior-block comparison; the
+90th percentile of their absolute deviations from that median replaces the
+surrounding block spread. The configured noise multiplier, minimum separation,
+pixel mean/median gates and interior support fraction still apply. This does
+not assume zero noise just because there are zero or one usable blocks.
+
+The unchanged valid-coverage gate still applies and the pixel fallback also
+requires at least `max(4, ceil(max(4, block_size² // 2) * min_valid_fraction))`
+valid pixels (20 with the defaults). An empty, invalid or too small measured
+ring remains insufficient. More qualifying blocks give a better basis for a
+local comparison; a sparse strip can be less representative, and a flat
+measured spread does not prove the absence of residual depth bias.
 
 ## Diagnostics and GUI
 
@@ -84,6 +109,14 @@ accepted flag and failed gate names. NaN maps / null statistics mean a gate was
 not evaluable, not that it passed. Rings can overlap between regions. The normal
 debug image (`result.save_debug("debug.png", color=color)`) gives final decision
 reasons. Individual maps are available through `result.diagnostics` and the GUI.
+
+With a surround override, the per-region diagnostics also report
+`surround_min_blocks`, `surround_valid_pixels`,
+`surround_min_reference_pixels` when the pixel fallback is considered, and
+`surround_reference_source` (`block_means`, `ring_pixels` or null if not
+evaluated) with `surround_noise_m`. A failed pixel sample floor appears in
+`first_failed_surround_reference_mask`. At `0` the surrounding count failure
+mask can be clear even when the reference coverage or pixel sample floor fails.
 
 ## Limits
 

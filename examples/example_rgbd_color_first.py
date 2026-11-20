@@ -14,12 +14,32 @@ segmenter = RGBDBackgroundSegmenter(
     first_noise_multiplier=2.5,
     local_max_reference_separation_m=0.05,
 )
-result = segmenter.detect(
-    color, depth, background_color=background_color,
+detect_kwargs = dict(
+    background_color=background_color,
     background_depth=background_depth, color_order="RGB",
     registered_to_depth=True, depth_scale_m=0.001, diagnostics=True,
 )
+result = segmenter.detect(color, depth, **detect_kwargs)
 print("Selected pixels:", int(result.object_mask.sum()))
 print("Region evidence:", result.stages["fusion"]["regions"])
 # result.save_debug("color-first.png", color=color, color_order="RGB")
 # Inferred pixels are not verified material or grasp-safe measured support.
+
+# A narrow, valid table strip forms no half-filled surrounding block.
+# Keep all object-interior settings the same for an isolated comparison.
+roi = np.zeros(depth.shape, bool)
+roi[100:300, 160:480] = True
+roi[95:97, 160:480] = True
+relaxed = RGBDBackgroundSegmenter(
+    fusion_mode="color_first",
+    first_min_depth_delta_m=0.00075,
+    first_noise_multiplier=2.5,
+    local_max_reference_separation_m=0.05,
+    first_min_surround_blocks=0,
+)
+for label, detector in (("Default gate", segmenter), ("Surround override", relaxed)):
+    result = detector.detect(color, depth, work_roi=roi, **detect_kwargs)
+    stats = result.stages["fusion"]["regions"][0]
+    print(label, "selected", int(result.object_mask.sum()), "surround blocks",
+          stats["surround_blocks"], "source", stats.get("surround_reference_source"),
+          "failed gates", stats["failures"])

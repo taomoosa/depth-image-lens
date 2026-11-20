@@ -211,7 +211,7 @@ class RGBDBackgroundSegmenter:
                  model_max_colors=6, model_min_color_fraction=.03, model_max_regions=32,
                  model_training_policy="legacy", model_training_inset_px=2,
                  first_min_depth_delta_m=.00075, first_noise_multiplier=2.5,
-                 first_block_size_px=8, first_min_blocks=4,
+                 first_block_size_px=8, first_min_blocks=4, first_min_surround_blocks=None,
                  first_ring_radius_px=16, first_ring_gap_px=3,
                  first_min_valid_fraction=.6, first_min_area=64,
                  first_color_relaxation_ratio=.2, first_min_block_fraction=.75):
@@ -253,6 +253,10 @@ class RGBDBackgroundSegmenter:
                 ('model_max_regions', model_max_regions, 1, 128)):
             if type(value) is not int or not lower <= value <= upper:
                 raise ValueError(f'{key} must be an integer in {lower}..{upper}')
+        if first_min_surround_blocks is not None and (
+                type(first_min_surround_blocks) is not int or
+                not 0 <= first_min_surround_blocks <= 10000):
+            raise ValueError('first_min_surround_blocks must be None or an integer in 0..10000')
         if local_max_reference_separation_m is not None:
             try:
                 if (isinstance(local_max_reference_separation_m, (bool, np.bool_)) or
@@ -378,6 +382,7 @@ class RGBDBackgroundSegmenter:
             raise ValueError('color_relaxation_ratio must be in (0,1]')
         self.parameters = dict(numeric, first_block_size_px=first_block_size_px,
                                first_min_blocks=first_min_blocks, first_min_area=first_min_area,
+                               first_min_surround_blocks=first_min_surround_blocks,
                                first_ring_radius_px=first_ring_radius_px, first_ring_gap_px=first_ring_gap_px, model_training_policy=model_training_policy,
                                model_training_inset_px=model_training_inset_px,
                                model_reject_farther=model_reject_farther,

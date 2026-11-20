@@ -4,6 +4,8 @@ Block statistics are robustness heuristics, NOT independent samples, p-values,
 or calibrated confidence. A bias confined to an object-colored region remains
 indistinguishable from a shallow object in a single RGB-D observation.
 """
+from math import ceil
+
 import numpy as np
 from .debug import _opencv
 
@@ -22,6 +24,10 @@ def _summary(values):
                 q10_m=float(np.quantile(values, .1)), q90_m=float(np.quantile(values, .9)))
 
 
+def _block_footprint(size):
+    return max(4, size*size//2)
+
+
 def _blocks(mask, valid, delta, size, coverage):
     """At least half a block's footprint, then adequate valid coverage.
 
@@ -36,7 +42,7 @@ def _blocks(mask, valid, delta, size, coverage):
     seen = valid[yy, xx]
     n = np.bincount(inv, weights=seen, minlength=len(groups))
     sums = np.bincount(inv, weights=np.where(seen, delta[yy, xx], 0.), minlength=len(groups))
-    ok = (count >= max(4, size*size//2)) & (n >= count*coverage)
+    ok = (count >= _block_footprint(size)) & (n >= count*coverage)
     return sums[ok] / n[ok]
 
 
@@ -44,6 +50,11 @@ def color_first_fusion(delta, depth_fg, farther, color_fg, color_usable,
                        color_uncertain, lab, edge_valid, color_debug, valid,
                        roi, parameters, *, diagnostics=False):
     p = parameters; cv = _opencv(); shape = valid.shape
+    surround_override = p['first_min_surround_blocks']
+    min_surround_blocks = p['first_min_blocks'] if surround_override is None else surround_override
+    block_size = p['first_block_size_px']
+    min_coverage = p['first_min_valid_fraction']
+    min_pixel_reference = max(4, ceil(_block_footprint(block_size)*min_coverage))
     usable = roi & color_usable & edge_valid & ~color_debug['background_photometric_clipped_mask']
     candidate = usable & (color_debug['background_combined_score'] > p['first_color_relaxation_ratio']**2)
     upper = np.zeros(shape, bool)
@@ -69,6 +80,8 @@ def color_first_fusion(delta, depth_fg, farther, color_fg, color_usable,
     labels_out = np.zeros(shape, np.int32); records = []
     insufficient = candidate & (color_ids == 0)
     failure_masks = {name: np.zeros(shape, bool) for name in ('area','interior','region_coverage','surround_coverage','region_blocks','surround_blocks','mean_delta','median_delta','block_fraction')}
+    if surround_override is not None:
+        failure_masks['surround_reference'] = np.zeros(shape, bool)
     mean_map = np.full(shape, np.nan); median_map = mean_map.copy(); threshold_map = mean_map.copy()
     next_id = 0
     for group in range(1, int(color_ids.max())+1):
@@ -95,21 +108,32 @@ def color_first_fusion(delta, depth_fg, farther, color_fg, color_usable,
             ring &= ~near & usable & ~candidate
             interiors |= interior; rings |= ring
             iv = interior & sample_valid; rv = ring & sample_valid
-            ic = float(iv.sum()/max(1,interior.sum())); rc = float(rv.sum()/max(1,ring.sum()))
-            ib = _blocks(interior,sample_valid,clipped,p['first_block_size_px'],p['first_min_valid_fraction'])
-            rb = _blocks(ring,sample_valid,clipped,p['first_block_size_px'],p['first_min_valid_fraction'])
-            region = _summary(clipped[iv]); surround = _summary(clipped[rv])
-            gates = dict(area=True,interior=bool(interior.any()),region_coverage=ic>=p['first_min_valid_fraction'],surround_coverage=rc>=p['first_min_valid_fraction'],region_blocks=len(ib)>=p['first_min_blocks'],surround_blocks=len(rb)>=p['first_min_blocks'])
+            ring_values = clipped[rv]
+            ic = float(iv.sum()/max(1,interior.sum())); rc = float(len(ring_values)/max(1,ring.sum()))
+            ib = _blocks(interior,sample_valid,clipped,block_size,min_coverage)
+            rb = _blocks(ring,sample_valid,clipped,block_size,min_coverage)
+            region = _summary(clipped[iv]); surround = _summary(ring_values)
+            gates = dict(area=True,interior=bool(interior.any()),region_coverage=ic>=min_coverage,surround_coverage=rc>=min_coverage,region_blocks=len(ib)>=p['first_min_blocks'],surround_blocks=len(rb)>=min_surround_blocks)
+            use_pixels = surround_override is not None and len(rb) < 2 and gates['surround_blocks']
+            if use_pixels:
+                # One block mean gives an artificial zero spread, and zero
+                # block means give no estimator. Use real ring observations
+                # only, with a sample floor even at 100% ring coverage.
+                gates['surround_reference'] = len(ring_values) >= min_pixel_reference
             enough = all(gates.values())
             mean_delta = median_delta = required = fraction = None
+            reference_source = noise = None
             if enough:
                 mean_delta = region['mean_m']-surround['mean_m']
                 median_delta = region['median_m']-surround['median_m']
-                # Use reference block spread without dividing by sqrt(N).
+                reference_values = ring_values if use_pixels else rb
+                reference_median = np.median(reference_values)
+                reference_source = 'ring_pixels' if use_pixels else 'block_means'
+                # Use the observed spread without dividing by sqrt(N).
                 # Large images do not turn correlated table bias into certainty.
-                noise = float(np.quantile(np.abs(rb-np.median(rb)), .9))
+                noise = float(np.quantile(np.abs(reference_values-reference_median), .9))
                 required = p['first_min_depth_delta_m'] + p['first_noise_multiplier']*noise
-                fraction = float(np.mean(ib-np.median(rb) >= required))
+                fraction = float(np.mean(ib-reference_median >= required))
                 gates.update(mean_delta=mean_delta>=required,median_delta=median_delta>=required,block_fraction=fraction>=p['first_min_block_fraction'])
                 mean_map[part]=mean_delta; median_map[part]=median_delta; threshold_map[part]=required
             else:
@@ -118,7 +142,14 @@ def color_first_fusion(delta, depth_fg, farther, color_fg, color_usable,
             if accepted: selected |= part & sample_valid
             for name, passed in gates.items():
                 if not passed: failure_masks[name] |= part
-            records.append(dict(id=next_id,color_group=group,area=area,interior_area=int(interior.sum()),surround_area=int(ring.sum()),region_valid_fraction=ic,surround_valid_fraction=rc,region_blocks=len(ib),surround_blocks=len(rb),region=region,surround=surround,mean_delta_m=mean_delta,median_delta_m=median_delta,required_delta_m=required,supported_block_fraction=fraction,accepted=accepted,failures=[k for k,v in gates.items() if not v]))
+            record = dict(id=next_id,color_group=group,area=area,interior_area=int(interior.sum()),surround_area=int(ring.sum()),region_valid_fraction=ic,surround_valid_fraction=rc,region_blocks=len(ib),surround_blocks=len(rb),region=region,surround=surround,mean_delta_m=mean_delta,median_delta_m=median_delta,required_delta_m=required,supported_block_fraction=fraction,accepted=accepted,failures=[k for k,v in gates.items() if not v])
+            if surround_override is not None:
+                record.update(surround_min_blocks=min_surround_blocks,
+                              surround_valid_pixels=len(ring_values),
+                              surround_min_reference_pixels=min_pixel_reference if use_pixels else None,
+                              surround_reference_source=reference_source,
+                              surround_noise_m=noise)
+            records.append(record)
     inferred = selected & ~depth_fg
     suppressed = depth_fg & ~selected
     deferred = candidate & ~selected & ~suppressed
