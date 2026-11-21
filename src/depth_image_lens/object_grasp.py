@@ -4,8 +4,55 @@ import numpy as np
 from .debug import DebugResultMixin
 from .depth import _numeric_image, _depth_16uc1_to_meters, depth_pair_16uc1_to_meters
 from .geometry import CameraIntrinsics, TablePlane, bool_mask, mask_observation_regions as _selected_regions
+from ._oblique_gaps import gap_proposals, result_detail, validate_gap_options
 
 
+def _gap_bilateral(depth, labels, missing, support, eligible, thresholds, options):
+    """Check a separately reported width hypothesis for one supported pair."""
+    minimum = thresholds['min_width_rows']
+    jump = thresholds['depth_jump_m']
+    allowed = {c['id']: c for c in eligible}
+    limit = options['invalid_gap_max_px']
+    best = None
+    for proposal in gap_proposals(
+            depth, labels, missing, support, max_px=limit,
+            depth_jump_m=min(jump, options['invalid_gap_depth_jump_m']),
+            min_lines=options['invalid_gap_min_lines']):
+        a, b = proposal.ids
+        if a not in allowed or b not in allowed:
+            continue
+        inferred, z = proposal.build(depth)
+        measured = (labels == a) | (labels == b)
+        inferred_px = int(inferred.sum())
+        # Keep the hypothetical route predominantly measured.
+        if inferred_px > (allowed[a]['pixels'] + allowed[b]['pixels']) / 3:
+            continue
+        full = measured | inferred
+        pairs = full[:, :-1] & full[:, 1:]
+        with np.errstate(invalid='ignore', over='ignore'):
+            difference = np.abs(z[:, :-1] - z[:, 1:])
+        tol = 4*np.finfo(float).eps*np.maximum(
+            np.maximum(np.abs(z[:, :-1]), np.abs(z[:, 1:])), jump)
+        pairs &= difference <= jump+tol
+        # Measured labels are individually 4-connected and every inferred run
+        # explicitly joins them. Count sustained hypothetical row widths, but
+        # never report this as the detector's observed width.
+        runs = {}
+        for y in np.flatnonzero(full.any(axis=1)):
+            xs = np.flatnonzero(full[y])
+            ends = xs[:-1][np.diff(xs) != 1]
+            breaks = np.union1d(ends, xs[:-1][~pairs[y, xs[:-1]]])
+            starts = np.r_[xs[0], xs[1:][np.isin(xs[:-1], breaks)]]
+            stops = np.r_[breaks, xs[-1]]
+            runs[int(y)] = int((stops-starts+1).max())
+        width = max((min(runs.get(row + offset, 0) for offset in range(minimum))
+                     for row in runs), default=0)
+        if width < thresholds['min_width_px']:
+            continue
+        item = (width, -inferred_px, sorted(proposal.ids), proposal.axis, inferred, full)
+        if best is None or item[:2] > best[:2]:
+            best = item
+    return best
 
 
 @dataclass(frozen=True)
@@ -36,7 +83,8 @@ class ObjectOnlyGraspDetector:
     """
     def __init__(self, *, min_lift_m=.03, min_width_px=40, min_pixels=20,
                  min_width_rows=3, min_lift_fraction=.1, min_valid_fraction=.7,
-                 reference_error_m=.005, depth_jump_m=.1):
+                 reference_error_m=.005, depth_jump_m=.1, invalid_gap_max_px=0,
+                 invalid_gap_depth_jump_m=.02, invalid_gap_min_lines=3):
         for name, value in [('min_width_px', min_width_px), ('min_pixels', min_pixels),
                             ('min_width_rows', min_width_rows)]:
             if type(value) is not int or value < 1:
@@ -46,6 +94,8 @@ class ObjectOnlyGraspDetector:
                 or depth_jump_m <= 0 or not 0 < min_lift_fraction <= 1
                 or not 0 < min_valid_fraction <= 1):
             raise ValueError('finite positive thresholds/fractions required; error must be nonnegative')
+        self._gap_options = validate_gap_options(invalid_gap_max_px, invalid_gap_depth_jump_m,
+                                                 invalid_gap_min_lines)
         self.thresholds = dict(min_lift_m=float(min_lift_m), min_width_px=min_width_px,
             min_pixels=min_pixels, min_width_rows=min_width_rows,
             min_lift_fraction=float(min_lift_fraction), min_valid_fraction=float(min_valid_fraction),
@@ -63,12 +113,14 @@ class ObjectOnlyGraspDetector:
     def detect(self, depth, object_mask, *, depth_unit, difference=None,
                intrinsics=None, table=None, observed_mask=None, background_valid=None,
                whole_object_visible=False, mask_complete=False, diagnostics=False,
-               gripper_masks=None, exclude_mask=None, uncertain_mask=None):
+               gripper_masks=None, exclude_mask=None, uncertain_mask=None, gap_support_mask=None):
         """Explicit m/mm optical-axis Z; difference uses the same unit, if supplied.
 
         Difference means background-current (signed or clipped positive), never
         absolute height. Zeros may be arbitrary exclusions, so cannot prove absence.
         Exactly one reference route is allowed, or none for an unknown result.
+        Opt-in invalid-depth width hypotheses require an independently supported
+        object-only gap_support_mask, distinct from observed/elevated evidence.
         """
         if depth_unit not in ('m', 'mm'):
             raise ValueError('explicit m or mm depth_unit required')
@@ -94,7 +146,10 @@ class ObjectOnlyGraspDetector:
         obj &= ~excluded
         obs = np.ones(z.shape, bool) if observed_mask is None else bool_mask(observed_mask, z.shape, 'observed_mask')
         bg = np.ones(z.shape, bool) if background_valid is None else bool_mask(background_valid, z.shape, 'background_valid')
-        valid = np.isfinite(z) & (z > 0) & obs & ~uncertain
+        sensor_valid = np.isfinite(z) & (z > 0)
+        valid = sensor_valid & obs & ~uncertain
+        gap_support = (None if gap_support_mask is None else
+                       bool_mask(gap_support_mask, z.shape, 'gap_support_mask'))
         evidence = np.full(z.shape, np.nan)
         reference = 'missing'
         if table is not None:
@@ -206,7 +261,29 @@ class ObjectOnlyGraspDetector:
         debug = dict(valid_reference_mask=selected, elevated_mask=lifted, component_labels=labels, observation_region_labels=region_labels) if diagnostics else {}
         if diagnostics and (gripper_masks is not None or exclude_mask is not None or uncertain_mask is not None):
             debug.update(excluded_mask=excluded,uncertain_mask=uncertain.copy(),gripper_masks={k:v.copy() for k,v in grippers.items()})
+        thresholds = dict(t)
+        if self._gap_options['invalid_gap_max_px']:
+            thresholds.update(self._gap_options)
+            detail = result_detail('independent_foreground_required' if gap_support is None else
+                                   'no_supported_candidate')
+            if wide:
+                detail['status'] = 'already_observed_bilateral'
+            elif gap_support is not None and len(eligible) >= 2:
+                missing = ~sensor_valid & obs & ~uncertain & ~excluded
+                if difference is not None:
+                    missing &= bg
+                candidate = _gap_bilateral(z, labels, missing, gap_support, eligible, t,
+                                           self._gap_options)
+                if candidate is not None:
+                    width, negative_pixels, ids, axis, inferred, full = candidate
+                    detail.update(status='candidate', candidate=True, inferred_gap_pixels=-negative_pixels,
+                                  candidate_sustained_width_px=width, measured_component_ids=ids,
+                                  gap_direction=axis)
+                    if diagnostics:
+                        debug.update(invalid_depth_gap_inferred_mask=inferred,
+                                     invalid_depth_gap_candidate_mask=full)
+            metrics['invalid_depth_gap'] = detail
         bilateral_reason = ('sufficient_same_component_visible_width' if bilateral == 'bilateral'
                             else 'insufficient_visible_width_not_unilateral' if held == 'held'
                             else 'elevated_support_not_established')
-        return ObjectOnlyGraspResult(held, bilateral, reason, bilateral_reason, metrics, dict(t), warnings, diagnostics=debug)
+        return ObjectOnlyGraspResult(held, bilateral, reason, bilateral_reason, metrics, thresholds, warnings, diagnostics=debug)

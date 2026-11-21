@@ -148,3 +148,7 @@ satisfy the width-based bilateral heuristic: `physical_grasp` remains unknown.
 Excluding ambiguous selected pixels prevents a complete negative claim from
 being manufactured. Local positive evidence and whole-object confidence remain
 separate. Run `python examples/example_object_context.py`.
+
+If invalid depth splits one silhouette into two measured fragments, see
+[missing-depth stripe hypotheses](OBLIQUE_GAPS.md). The optional candidate does
+not change the observed width or the ordinary held/bilateral outputs.

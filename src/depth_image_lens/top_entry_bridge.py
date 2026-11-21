@@ -8,6 +8,7 @@ from .depth import _numeric_image
 from .geometry import bool_mask
 from .mask_cleanup import _components8, _box_sum
 from .oblique import _graph_components
+from ._oblique_gaps import gap_proposals, result_detail, validate_gap_options
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,44 @@ def _spanning(parts, shape, seeds, min_area):
     return result
 
 
+def _gap_bridge(depth, parts, seeds, missing, support, thresholds, options):
+    """Test one missing-depth crossing, keeping both attachment seeds measured."""
+    radius = thresholds['min_path_width_px'] // 2
+    min_side = max(thresholds['min_path_width_px']**2, thresholds['min_area']//2)
+    labels = np.zeros(depth.shape, np.int32)
+    sizes = {}
+    attachments = {}
+    for label, p in enumerate(parts, 1):
+        ys, xs = p.T
+        hits = tuple(bool(seed[ys, xs].any()) for seed in seeds)
+        if len(p) >= min_side and sum(hits) == 1:
+            labels[ys, xs] = label
+            sizes[label] = len(p)
+            attachments[label] = hits
+    best = None
+    for proposal in gap_proposals(
+            depth, labels, missing, support, max_px=options['invalid_gap_max_px'],
+            depth_jump_m=min(thresholds['depth_jump_m'], options['invalid_gap_depth_jump_m']),
+            min_lines=max(thresholds['min_path_width_px'], options['invalid_gap_min_lines'])):
+        a, b = proposal.ids
+        if attachments[a] == attachments[b] or sizes[a]+sizes[b] < thresholds['min_area']:
+            continue
+        inferred, scratch = proposal.build(depth)
+        inferred_px = int(inferred.sum())
+        if inferred_px > (sizes[a]+sizes[b]) / 3:
+            continue
+        joined = (labels == a) | (labels == b) | inferred
+        thick = _erode(joined, radius)
+        thick_parts, _, _ = _graph_components(thick, scratch, thresholds['depth_jump_m'])
+        core = _spanning(thick_parts, depth.shape, seeds, 1)
+        if not (core & inferred).any():
+            continue
+        rank = (int(core.sum()), -inferred_px)
+        if best is None or rank > best[0]:
+            best = rank, sorted(proposal.ids), proposal.axis, inferred, joined, core
+    return best
+
+
 class TopEntryBridgeDetector:
     """Find two broad top entries, then test a below-band depth-continuous path.
 
@@ -59,7 +98,8 @@ class TopEntryBridgeDetector:
     def __init__(self, *, entry_band_height_px=8, min_entry_width_px=4,
                  min_entry_row_fraction=.6, min_entry_gap_px=2,
                  min_path_width_px=3, min_bridge_drop_px=3, min_area=20,
-                 gap_radius_px=1, depth_jump_m=.05):
+                 gap_radius_px=1, depth_jump_m=.05, invalid_gap_max_px=0,
+                 invalid_gap_depth_jump_m=.02, invalid_gap_min_lines=3):
         positive = dict(entry_band_height_px=entry_band_height_px,
                         min_entry_width_px=min_entry_width_px,
                         min_entry_gap_px=min_entry_gap_px,
@@ -80,13 +120,15 @@ class TopEntryBridgeDetector:
         if (not np.isfinite([min_entry_row_fraction, depth_jump_m]).all()
                 or not 0 < min_entry_row_fraction <= 1 or depth_jump_m <= 0):
             raise ValueError('finite positive depth jump and row fraction in (0, 1] required')
+        self._gap_options = validate_gap_options(invalid_gap_max_px, invalid_gap_depth_jump_m,
+                                                 invalid_gap_min_lines)
         self.thresholds = {**positive, 'min_entry_row_fraction': float(min_entry_row_fraction),
                            'min_bridge_drop_px': min_bridge_drop_px,
                            'gap_radius_px': gap_radius_px, 'depth_jump_m': float(depth_jump_m)}
 
     def detect_mask(self, depth, foreground_mask, *, depth_unit,
                     observed_mask=None, exclude_mask=None, uncertain_mask=None,
-                    mask_complete=False, diagnostics=False):
+                    mask_complete=False, diagnostics=False, gap_support_mask=None):
         """Use aligned HxW depth (explicit m/mm) and a boolean foreground mask.
 
         observed_mask marks actual depth observations, not mask completeness.
@@ -94,6 +136,8 @@ class TopEntryBridgeDetector:
         mask_complete=True explicitly attests that false mask pixels mean absence.
         Even then no is withheld for missing depth, weak paths and cropped paths.
         Input row zero is the top entry boundary; rotating/cropping is caller work.
+        Optional invalid-depth evidence requires an independent, object-only
+        gap_support_mask; it never adds top entries or changes bridge.
         """
         if depth_unit not in ('m', 'mm'):
             raise ValueError('explicit m or mm depth_unit required')
@@ -109,7 +153,10 @@ class TopEntryBridgeDetector:
         observed = np.ones(z.shape, bool) if observed_mask is None else bool_mask(observed_mask, z.shape, 'observed_mask')
         excluded = np.zeros(z.shape, bool) if exclude_mask is None else bool_mask(exclude_mask, z.shape, 'exclude_mask')
         uncertain = np.zeros(z.shape, bool) if uncertain_mask is None else bool_mask(uncertain_mask, z.shape, 'uncertain_mask')
-        valid = np.isfinite(z) & (z > 0) & observed & ~uncertain
+        sensor_valid = np.isfinite(z) & (z > 0)
+        valid = sensor_valid & observed & ~uncertain
+        gap_support = (None if gap_support_mask is None else
+                       bool_mask(gap_support_mask, z.shape, 'gap_support_mask'))
         silhouette = supplied & ~excluded
         upper = silhouette.copy(); upper[band:] = False
         labels, sizes = _components8(upper)
@@ -134,9 +181,15 @@ class TopEntryBridgeDetector:
         debug = {'entry_labels': labels, 'invalid_or_uncertain_mask': ~valid,
                  'excluded_mask': excluded.copy()} if diagnostics else {}
 
+        thresholds = dict(t)
+        if self._gap_options['invalid_gap_max_px']:
+            thresholds.update(self._gap_options)
+            metrics['invalid_depth_gap'] = result_detail(
+                'independent_foreground_required' if gap_support is None else 'no_supported_candidate')
+
         def finish(value, candidate, reason):
             return TopEntryBridgeResult(value, bool(candidate), [reason], entries,
-                                        metrics, dict(t), debug)
+                                        metrics, thresholds, debug)
 
         if len(entries) != 2:
             return finish('unknown', False, 'requires_exactly_two_broad_separate_top_entries')
@@ -182,7 +235,23 @@ class TopEntryBridgeDetector:
                          observed_path_mask=path, robust_path_core_mask=core,
                          depth_rejected_edge_mask=rejected)
         if supported:
+            if self._gap_options['invalid_gap_max_px']:
+                metrics['invalid_depth_gap']['status'] = 'already_observed_bridge'
             return finish('yes', True, 'wide_observed_depth_continuous_path_between_top_entries')
+        if self._gap_options['invalid_gap_max_px'] and gap_support is not None:
+            # No inferred top entry, grip-contact connector or width inside the
+            # entry band. A distinct, measured route must reach each seed.
+            missing = ~sensor_valid & observed & ~uncertain & domain & (yy >= band+t['min_bridge_drop_px'])
+            extra = _gap_bridge(z, parts, seeds, missing, gap_support, t, self._gap_options)
+            if extra is not None:
+                rank, ids, axis, inferred, joined, inferred_core = extra
+                metrics['invalid_depth_gap'].update(
+                    status='candidate', candidate=True, inferred_gap_pixels=-rank[1],
+                    candidate_core_pixels=rank[0], measured_fragment_ids=ids, gap_direction=axis)
+                if diagnostics:
+                    debug.update(invalid_depth_gap_inferred_mask=inferred,
+                                 invalid_depth_gap_candidate_mask=joined,
+                                 invalid_depth_gap_candidate_core_mask=inferred_core)
         # Geometric near-connections may be noise, genuine gaps or missing data.
         # They are useful candidates but cannot turn into a positive observation.
         geometric = silhouette & domain
