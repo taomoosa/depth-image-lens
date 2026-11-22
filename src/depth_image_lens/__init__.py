@@ -85,3 +85,7 @@ __all__ += ["TopEntryBridgeDetector", "TopEntryBridgeResult"]
 from .hanging_profile import HangingProfileAnalyzer, HangingProfileResult
 
 __all__ += ["HangingProfileAnalyzer", "HangingProfileResult"]
+
+from ._oblique_completion import ObliqueComponentCompletion
+
+__all__ += ["ObliqueComponentCompletion"]

@@ -5,6 +5,7 @@ from .debug import DebugResultMixin
 from .depth import _numeric_image, _depth_16uc1_to_meters, depth_pair_16uc1_to_meters
 from .geometry import CameraIntrinsics, TablePlane, bool_mask, mask_observation_regions as _selected_regions
 from ._oblique_gaps import _depth_edge, gap_proposals, result_detail, validate_gap_options
+from ._oblique_completion import ObliqueComponentCompletion, _CompletionAccess, complete_components
 
 
 def _gap_bilateral(depth, labels, missing, support, eligible, thresholds, options):
@@ -61,7 +62,7 @@ def _gap_bilateral(depth, labels, missing, support, eligible, thresholds, option
 
 
 @dataclass(frozen=True)
-class ObjectOnlyGraspResult(DebugResultMixin):
+class ObjectOnlyGraspResult(DebugResultMixin, _CompletionAccess):
     held: str
     bilateral: str
     reason: str
@@ -74,9 +75,10 @@ class ObjectOnlyGraspResult(DebugResultMixin):
     physical_grasp: str = 'unknown'
     validation_status: str = 'not_validated'
     diagnostics: dict = field(default_factory=dict, repr=False)
+    completion: ObliqueComponentCompletion | None = field(default=None, repr=False)
 
     def to_dict(self):
-        return {k: v for k, v in vars(self).items() if k != 'diagnostics'}
+        return self._completion_metadata(vars(self))
 
 
 class ObjectOnlyGraspDetector:
@@ -268,7 +270,9 @@ class ObjectOnlyGraspDetector:
         if diagnostics and (gripper_masks is not None or exclude_mask is not None or uncertain_mask is not None):
             debug.update(excluded_mask=excluded,uncertain_mask=uncertain.copy(),gripper_masks={k:v.copy() for k,v in grippers.items()})
         thresholds = dict(t)
+        completion = None
         if self._gap_options['invalid_gap_max_px']:
+            proposal = gap_inferred = None
             thresholds.update(self._gap_options)
             detail = result_detail('no_supported_candidate')
             if wide:
@@ -281,6 +285,7 @@ class ObjectOnlyGraspDetector:
                                            self._gap_options)
                 if candidate is not None:
                     width, negative_pixels, proposal, inferred, full = candidate
+                    gap_inferred = inferred
                     detail.update(status='candidate', candidate=True, inferred_gap_pixels=-negative_pixels,
                                   candidate_sustained_width_px=width, measured_component_ids=sorted(proposal.ids),
                                   gap_direction=proposal.axis, **proposal.crossing_summary(z))
@@ -288,7 +293,10 @@ class ObjectOnlyGraspDetector:
                         debug.update(invalid_depth_gap_inferred_mask=inferred,
                                      invalid_depth_gap_candidate_mask=full)
             metrics['invalid_depth_gap'] = detail
+            completion = complete_components(
+                labels, scope='elevated_object_depth_components',
+                ids=() if proposal is None else proposal.ids, inferred=gap_inferred)
         bilateral_reason = ('sufficient_same_component_visible_width' if bilateral == 'bilateral'
                             else 'insufficient_visible_width_not_unilateral' if held == 'held'
                             else 'elevated_support_not_established')
-        return ObjectOnlyGraspResult(held, bilateral, reason, bilateral_reason, metrics, thresholds, warnings, diagnostics=debug)
+        return ObjectOnlyGraspResult(held, bilateral, reason, bilateral_reason, metrics, thresholds, warnings, diagnostics=debug, completion=completion)

@@ -106,3 +106,5 @@ For an optional hypothesis specific to narrow invalid-depth stripes and
 locally coherent measured flanks, see [missing-depth stripes](OBLIQUE_GAPS.md).
 This is separate from the default geometric candidate and never turns the
 result into an observed bridge.
+The opt-in completed components belong to the valid search region, not to
+the whole input foreground mask.

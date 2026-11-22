@@ -23,13 +23,25 @@ def main():
     measured = depth > 0
     grasp = ObjectOnlyGraspDetector(min_width_px=60, invalid_gap_max_px=3).detect(
         depth, cloth & measured, depth_unit='m', difference=difference,
-        diagnostics=True)
+        diagnostics=False)
     bridge = TopEntryBridgeDetector(gap_radius_px=0, invalid_gap_max_px=3).detect_mask(
-        depth, full & measured, depth_unit='m', diagnostics=True)
+        depth, full & measured, depth_unit='m', diagnostics=False)
     print('Observed width and bilateral:', grasp.metrics['visible_width_px'], grasp.bilateral)
     print('Width candidate:', grasp.metrics['invalid_depth_gap'])
     print('Observed bridge and generic geometric candidate:', bridge.bridge, bridge.candidate_bridge)
     print('Missing-depth bridge candidate:', bridge.metrics['invalid_depth_gap'])
+    for name, result in [('Object-only', grasp), ('Top-entry', bridge)]:
+        completion = result.completion
+        if completion is None:
+            continue
+        print(name, 'completion:', completion.to_dict())
+        if completion.merged_component_id is not None:
+            # Use the per-component mask instead of re-labeling the binary
+            # union when touching depth-discontinuous fragments must stay separate.
+            component_mask = completion.component_mask(completion.merged_component_id)
+            inferred = component_mask & result.inferred_mask
+            print(name, 'reusable 2D component mask:', int(component_mask.sum()),
+                  'pixels including', int(inferred.sum()), 'inferred geometry pixels')
 
 
 if __name__ == '__main__':

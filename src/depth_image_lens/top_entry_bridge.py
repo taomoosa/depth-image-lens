@@ -9,10 +9,11 @@ from .geometry import bool_mask
 from .mask_cleanup import _components8, _box_sum
 from .oblique import _graph_components
 from ._oblique_gaps import gap_proposals, result_detail, validate_gap_options
+from ._oblique_completion import ObliqueComponentCompletion, _CompletionAccess, complete_components
 
 
 @dataclass(frozen=True)
-class TopEntryBridgeResult:
+class TopEntryBridgeResult(_CompletionAccess):
     bridge: str
     candidate_bridge: bool
     reasons: list
@@ -22,9 +23,10 @@ class TopEntryBridgeResult:
     diagnostics: dict = field(default_factory=dict, repr=False)
     scope: str = 'visible_top_entry_connectivity_not_physical_grasp'
     validation_status: str = 'not_validated'
+    completion: ObliqueComponentCompletion | None = field(default=None, repr=False)
 
     def to_dict(self):
-        return {k: v for k, v in vars(self).items() if k != 'diagnostics'}
+        return self._completion_metadata(vars(self))
 
 
 def _erode(mask, radius):
@@ -212,9 +214,19 @@ class TopEntryBridgeDetector:
             thresholds.update(self._gap_options)
             metrics['invalid_depth_gap'] = result_detail('no_supported_candidate')
 
+        measured_parts = proposal = gap_inferred = None
+
         def finish(value, candidate, reason):
+            completion = None
+            if self._gap_options['invalid_gap_max_px'] and measured_parts is not None:
+                labels = np.zeros(z.shape, np.int32)
+                for label, points in enumerate(measured_parts, 1):
+                    labels[tuple(points.T)] = label
+                completion = complete_components(
+                    labels, scope='top_entry_valid_search_depth_components',
+                    ids=() if proposal is None else proposal.ids, inferred=gap_inferred)
             return TopEntryBridgeResult(value, bool(candidate), [reason], entries,
-                                        metrics, thresholds, debug)
+                                        metrics, thresholds, debug, completion=completion)
 
         if len(entries) != 2:
             return finish('unknown', False, 'requires_exactly_two_broad_separate_top_entries')
@@ -238,6 +250,7 @@ class TopEntryBridgeDetector:
         domain &= ~excluded
         raw = silhouette & domain & valid
         parts, rejected, edge_count = _graph_components(raw, z, t['depth_jump_m'])
+        measured_parts = parts
         path = _spanning(parts, z.shape, seeds, t['min_area'])
         radius = t['min_path_width_px'] // 2
         core = np.zeros(z.shape, bool)
@@ -270,6 +283,7 @@ class TopEntryBridgeDetector:
             extra = _gap_bridge(z, parts, seeds, missing, gap_support, center_gap, t, self._gap_options)
             if extra is not None:
                 rank, proposal, inferred, joined, inferred_core = extra
+                gap_inferred = inferred
                 metrics['invalid_depth_gap'].update(
                     status='candidate', candidate=True, inferred_gap_pixels=-rank[1],
                     candidate_core_pixels=rank[0], measured_fragment_ids=sorted(proposal.ids),

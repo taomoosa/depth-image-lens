@@ -111,6 +111,48 @@ threshold aggressively to force those cases.
   this result as an observed grasp or completed bridge; use additional
   observation from a changed viewpoint or independent evidence if needed.
 
+## Reuse completed components
+
+With gap completion enabled, the same detector result also exposes
+`completed_components`, `completed_labels`, `completed_mask`, and
+`inferred_mask` without `diagnostics=True`. The completion changes **component
+geometry**, not depth or the measured decision. `result.completion` gives
+the original `measured_labels` and `measured_mask` with the new outputs.
+
+```python
+if grasp.completion is not None and grasp.completion.merged_component_id is not None:
+    merged_id = grasp.completion.merged_component_id
+    component_mask = grasp.completion.component_mask(merged_id)
+    inferred_only = component_mask & grasp.inferred_mask
+    measured_only = component_mask & grasp.completion.measured_mask
+    # Reuse component_mask for 2D shape processing. Keep inferred_only separate
+    # from measured depth; it has no measured Z.
+```
+
+- `completion.status == "merged"`: the selected pair becomes one completed
+  component and takes the smaller of its original IDs. Original labels still
+  exist in `completion.measured_labels`. IDs of all other components are
+  unchanged. Completed records report `source_component_ids`, `pixels`,
+  `measured_pixels`, `inferred_pixels`, exclusive `bbox_xyxy`, and pixel spans.
+  IDs are local to one result, not persistent across frames.
+- `completion.status == "measured_only"`: no accepted pair; the measured
+  labels and mask are returned unchanged, with an all-False inferred mask.
+  This includes an already adequate measured result. Gap completion disabled
+  (`invalid_gap_max_px=0`) returns `completion=None`. Top-entry also returns
+  `None` if it could not establish a two-entry search domain.
+- Top-entry's mask covers its valid **search region**, not the
+  whole input silhouette; exclusions and pixels outside that region are not
+  brought back. Object-only starts from its measured elevated components, not
+  the original unfiltered object selection. Neither output is a replacement
+  for segmentation or a full-scene mask.
+- `completed_mask` is a binary union. Touching components with inconsistent
+  measured depths can remain distinct in `completed_labels`, even when the
+  binary union visually touches. To retain component identity downstream,
+  use `completed_labels` or select one `component_mask(id)`; do not run plain
+  2D connected-components on the union and assume the labels are equivalent.
+- `to_dict()` includes the completion status and component records when
+  available, but does not serialize the aligned mask or label arrays.
+
 Run `python examples/example_oblique_invalid_depth_gap.py` to compare the
-measured and candidate paths on an artificial stripe. The synthetic checks are
-not a measured camera-accuracy guarantee.
+measured, candidate, and completed outputs on an artificial stripe. These
+synthetic checks are not a measured camera-accuracy guarantee.

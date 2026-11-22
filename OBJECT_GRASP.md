@@ -152,3 +152,5 @@ separate. Run `python examples/example_object_context.py`.
 If invalid depth splits one silhouette into two measured fragments, see
 [missing-depth stripe hypotheses](OBLIQUE_GAPS.md). The optional candidate does
 not change the observed width or the ordinary held/bilateral outputs.
+The opt-in result can also return completed component masks separately from
+measured depth and decisions.
