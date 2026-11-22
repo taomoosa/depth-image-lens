@@ -91,6 +91,86 @@ ring remains insufficient. More qualifying blocks give a better basis for a
 local comparison; a sparse strip can be less representative, and a flat
 measured spread does not prove the absence of residual depth bias.
 
+### Optional table anchors for a frame-wide depth offset
+
+Configure points on exposed table that normally remain outside the cloth, for
+example two interior points in each upper corner. Coordinates are integer
+`(x, y)` on the actual input array; in the tuner use the normalized **crop-local**
+coordinates, not the full image. With four points, three agreeing votes are
+required; if an entire two-point corner is covered, calibration normally skips
+rather than choosing the remaining corner or the largest object.
+
+```python
+segmenter = RGBDBackgroundSegmenter(
+    fusion_mode="color_first",
+    first_table_xy=[(30, 25), (60, 35), (560, 35), (590, 25)],
+    first_table_statistic="median",
+)
+```
+
+- `first_table_xy=None` (default) disables the feature. Otherwise supply 2–12
+  distinct nonnegative XY pairs. A strict majority must vote into one connected
+  current Lab appearance component; the points can be on unchanged-color table.
+  Out-of-view or unusable-color anchors do not vote, and their absence does not
+  reduce the required majority. Do not place the points on cloth, the image
+  boundary, or an RGB/depth registration edge.
+- `first_table_statistic` selects the **signed empty minus current depth**
+  estimator on the valid inset of that region, not a statistic of the anchor
+  pixels. `"median"` is the default and safer with depth outliers; `"mean"`
+  includes the region's valid extremes and can shift with outliers. The offset
+  is subtracted from signed depth changes, equivalent to adding it to current
+  depth. It is a scalar offset, not a fitted plane, and does not change either
+  input image or the RGB comparison.
+- Guards include minimum area, valid coverage/pixel count, spatial support,
+  and depth agreement around each voting point. The matched empty RGB must
+  also agree in encoded Lab chroma, using `background_chroma_tolerance` at the
+  votes and the inset's 90th percentile. This rejects a conspicuously different
+  hue over the anchors, but allows brightness changes. It can abstain after
+  a strong color cast or white-balance change. `first_table_min_anchor_span_px=16`
+  requires minimum Euclidean separation between the most distant voters.
+  `first_table_max_offset_m=0.008` caps the absolute offset (and median).
+  `first_table_max_deviation_m=0.003` caps robust depth dispersion/tile
+  mismatch, and mean/median disagreement when using mean. The voters' local
+  depth neighborhoods must agree within the smaller of that limit and
+  `first_min_depth_delta_m`. Sufficiently strong conflicts or insufficient
+  samples leave ordinary color-first behavior in place.
+- Only measured, color-compatible pixels close to the robust table depth are
+  forced to background. Invalid, too-high, or separated depth is not made
+  valid or forced to background. An accepted calibration first tries an
+  observed anchor-derived ring local to the object. When calibrated depth is
+  spatially consistent to within `first_min_depth_delta_m`, a bounded
+  additional search can use the same table within 3× the normal radius, capped
+  at 128 px. Without sufficient samples it uses the ordinary ring, not a
+  global table value. The anchor-derived reference excludes measurable
+  elevation; the robust calibrated median and tile spread bound its baseline
+  and noise, so trimming positive values cannot manufacture zero-noise or a
+  lower reference. The region's mean, median, and supporting-block gates
+  still all apply. The selected offset estimator does not replace these gates.
+- This assumes a still-registered view and caller-verified table anchor zones.
+  If cloth covers the anchors and is indistinguishable from the table under
+  color and paired-depth evidence, the method can misidentify it. In
+  particular, coherent shallow cloth with similar chroma covering all
+  anchors can mimic a brightness change and a small scalar depth offset. Do not use
+  the label as verified material, table geometry, or safe grasp evidence.
+  Table-like noise can also leave some pixels unresolved; larger real shifts
+  or spatial drift can cause the optional calibration to abstain. No real
+  camera accuracy is established by the synthetic examples.
+
+The `table_reference` object at `result.stages["fusion"]` reports the
+status, points and votes, chosen signed offset in meters, mean/median, depth
+spread and table pixel counts. The per-region `table_reference_source` is
+`anchor_local_ring`, `anchor_expanded_ring`, or `ordinary_ring`; use
+`table_reference_radius_px` to see the actual search distance. With diagnostics
+on, compare `first_table_proposal_mask`, `first_table_reference_domain_mask`,
+`first_table_reference_mask`, and `first_table_forced_background_mask`.
+`first_candidate_mask` still shows pre-fusion color candidates, including
+forced table pixels; forced pixels are removed before region labeling.
+`depth_difference_m` and the main `depth_foreground_mask` use the corrected
+residual when calibration is accepted, including on an ordinary-ring fallback; `first_table_raw_depth_difference_m` and
+`first_table_raw_depth_foreground_mask` preserve the raw comparison. Pixel
+decision 8 is the anchor-supported background heuristic. See
+[`examples/example_rgbd_color_first_table.py`](examples/example_rgbd_color_first_table.py).
+
 ## Diagnostics and GUI
 
 Choose `color_first` in the GUI's mode selector; all constructor parameters are

@@ -9,6 +9,7 @@ from ._rgbd_fusion import (evidence_fusion, color_seeded_fusion, DECISION_REASON
                            SEEDED_DECISION_REASONS, depth_anchored_fusion, ANCHORED_DECISION_REASONS)
 
 from ._rgbd_color_first import color_first_fusion, FIRST_DECISION_REASONS
+from ._rgbd_color_first_table import select_table, table_points
 from ._rgbd_color_model import color_model_fusion, MODEL_DECISION_REASONS, MODEL_REJECTION_FLAGS, render_model_rejection_maps
 from ._rgbd_debug import detailed_fusion_diagnostics
 from ._rgbd_color_local import color_local_fusion, LOCAL_DECISION_REASONS
@@ -95,7 +96,7 @@ class RGBDBackgroundResult(DebugResultMixin):
             # renderer's bounded number of mask thumbnails.
             palette = np.array([(35,35,35), (30,210,90), (50,160,245),
                                 (50,220,220), (235,75,90), (180,100,220),
-                                (240,150,40), (245,210,65)], dtype=np.uint8)
+                                (240,150,40), (245,210,65), (155,210,245)], dtype=np.uint8)
             tile = palette[self.diagnostics['fusion_decision']]
             if color_order == 'BGR':
                 tile = tile[..., ::-1].copy()
@@ -122,6 +123,10 @@ class RGBDBackgroundResult(DebugResultMixin):
                           '2: unused', '3: insufficient depth separation',
                           '4: unselected raw depth', '5: insufficient region/surround',
                           '6: area filtered', '7: thin region inference (uncertain)']
+                if self.parameters.get('first_table_xy') is not None:
+                    labels[1] = '1: region supported + corrected depth'
+                    labels[4] = '4: unselected corrected depth'
+                    labels.append('8: anchor-supported table background')
             elif self.parameters['fusion_mode'] == 'color_model':
                 labels = ['0: no candidate / unavailable', '1: depth model training pixel',
                           '2: unused', '3: color rejected / disconnected',
@@ -214,7 +219,21 @@ class RGBDBackgroundSegmenter:
                  first_block_size_px=8, first_min_blocks=4, first_min_surround_blocks=None,
                  first_ring_radius_px=16, first_ring_gap_px=3,
                  first_min_valid_fraction=.6, first_min_area=64,
-                 first_color_relaxation_ratio=.2, first_min_block_fraction=.75):
+                 first_color_relaxation_ratio=.2, first_min_block_fraction=.75,
+                 first_table_xy=None, first_table_statistic='median',
+                 first_table_max_offset_m=.008, first_table_max_deviation_m=.003,
+                 first_table_min_anchor_span_px=16):
+        first_table_xy = table_points(first_table_xy)
+        if not isinstance(first_table_statistic, str) or first_table_statistic not in ('median', 'mean'):
+            raise ValueError('first_table_statistic must be median or mean')
+        if type(first_table_min_anchor_span_px) is not int or not 1 <= first_table_min_anchor_span_px <= 10000:
+            raise ValueError('first_table_min_anchor_span_px must be an integer in 1..10000')
+        for key, value in (('first_table_max_offset_m', first_table_max_offset_m),
+                           ('first_table_max_deviation_m', first_table_max_deviation_m)):
+            if (isinstance(value, (bool, np.bool_)) or not np.isscalar(value)
+                    or not isinstance(value, (int, float, np.integer, np.floating))
+                    or not 0 < value <= 1):
+                raise ValueError(f'{key} must be finite in (0, 1] metres')
         if fusion_mode not in ('union', 'depth_required', 'evidence', 'color_seeded', 'depth_anchored', 'color_supported', 'color_region', 'color_local', 'color_model', 'color_first'):
             raise ValueError('fusion_mode must be union, depth_required, evidence, color_seeded, depth_anchored, color_supported, color_region, color_local, color_model or color_first')
         for key, value, lower, upper in (('anchored_refine_radius_px', anchored_refine_radius_px, 0, 20),
@@ -383,6 +402,10 @@ class RGBDBackgroundSegmenter:
         self.parameters = dict(numeric, first_block_size_px=first_block_size_px,
                                first_min_blocks=first_min_blocks, first_min_area=first_min_area,
                                first_min_surround_blocks=first_min_surround_blocks,
+                               first_table_xy=first_table_xy, first_table_statistic=first_table_statistic,
+                               first_table_max_offset_m=float(first_table_max_offset_m),
+                               first_table_max_deviation_m=float(first_table_max_deviation_m),
+                               first_table_min_anchor_span_px=first_table_min_anchor_span_px,
                                first_ring_radius_px=first_ring_radius_px, first_ring_gap_px=first_ring_gap_px, model_training_policy=model_training_policy,
                                model_training_inset_px=model_training_inset_px,
                                model_reject_farther=model_reject_farther,
@@ -478,6 +501,15 @@ class RGBDBackgroundSegmenter:
         color_info['difference_model']['applied_to_selection'] = bool(
             p['fusion_mode'] != 'depth_required' and color_usable.any())
         color_fg &= color_usable
+        table = None
+        raw_delta = delta
+        if p['fusion_mode'] == 'color_first' and p['first_table_xy'] is not None:
+            table = select_table(
+                delta, valid, color_usable & ~color_debug['background_photometric_clipped_mask'],
+                lab, color_debug['background_chroma_distance'], p)
+            offset = table[-1]['offset_m']
+            if offset is not None:
+                delta = delta - offset
         t = p['depth_threshold_m']
         depth_fg = valid & (delta > t)
         farther = valid & (delta < -t)
@@ -527,9 +559,15 @@ class RGBDBackgroundSegmenter:
         elif p['fusion_mode'] == 'color_first':
             obj, suppressed, deferred, fusion_debug = color_first_fusion(
                 delta, depth_fg, farther, color_fg, color_usable, color_uncertain,
-                lab, current_color_valid & roi, color_debug, valid, roi, p, diagnostics=diagnostics)
+                lab, current_color_valid & roi, color_debug, valid, roi, p,
+                diagnostics=diagnostics, table=table)
             observed = valid.copy()
             uncertain |= fusion_debug['unknown_mask']
+            if table is not None:
+                uncertain &= ~fusion_debug['first_table_forced_background_mask']
+                if diagnostics:
+                    fusion_debug['first_table_raw_depth_difference_m'] = raw_delta
+                    fusion_debug['first_table_raw_depth_foreground_mask'] = valid & (raw_delta > t)
             fusion_debug['unknown_mask'] = uncertain.copy()
             fusion_debug['confident_foreground_mask'] &= ~uncertain
         elif p['fusion_mode'] == 'color_model':
@@ -709,6 +747,11 @@ class RGBDBackgroundSegmenter:
                 'median_gate_misses_objects_with_most_depth_deltas_quantized_to_zero']
             metrics['color_first_region_count'] = len(fusion_debug['first_statistics'])
             metrics['color_first_budget_exceeded'] = fusion_debug['first_color_budget_exceeded']
+            if table is not None:
+                stages['fusion']['table_reference'] = table[-1]
+                stages['fusion']['decision_reasons']['8'] = 'anchor_supported_table_background'
+                stages['fusion']['warnings'].append('table_anchors_are_caller_assumptions_not_cloth_identity')
+
         debug = {}
         if diagnostics:
             debug = dict(color_debug, **fusion_debug, depth_difference_m=delta, color_usable_mask=color_usable,

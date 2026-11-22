@@ -128,6 +128,21 @@ def detailed_fusion_diagnostics(debug, p, roi, valid, color_fg, depth_fg,
             'first_upper_excluded_mask': 'Depth exceeds local_max_reference_separation_m; never included.',
         }.items():
             meta[key] = dict(kind='mask', description=description)
+        if 'first_table_forced_background_mask' in debug:
+            meta['first_surround_mask']['description'] = (
+                'Union of per-region reference domains; anchored rings may include separately validated changed-color table.')
+            for key, description in {
+                'first_table_proposal_mask': 'Voted connected color component; this proposal alone is not trusted table.',
+                'first_table_reference_domain_mask': 'Inset geometric anchor reference domain before depth validity and residual checks.',
+                'first_table_reference_mask': 'Measured anchor table reference pixels passing depth checks, before per-object distance limits.',
+                'first_table_forced_background_mask': 'Measured table-consistent pixels excluded from object candidates.',
+                'first_table_raw_depth_foreground_mask': 'Positive raw depth change above depth_threshold_m, prior to table-offset correction.',
+            }.items():
+                meta[key] = dict(kind='mask', description=description)
+            meta['first_table_raw_depth_difference_m'] = dict(
+                kind='numeric', unit='m', description='Empty minus current depth before table-offset correction.')
+            meta['depth_difference_m'] = dict(kind='numeric', unit='m',
+                description='Empty minus current depth, offset-corrected when table reference is accepted.')
         for key in debug:
             if key.startswith('first_failed_'):
                 meta[key] = dict(kind='overlapping_condition', description='Region gate failed: '+key[13:-5]+'. Other conditions may also fail. Unevaluated depth gates are not failures.')
