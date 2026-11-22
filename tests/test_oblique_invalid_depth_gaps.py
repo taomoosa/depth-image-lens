@@ -127,11 +127,11 @@ class ObliqueGapTests(unittest.TestCase):
             self.assertFalse(extra(g)['candidate'])
             self.assertFalse(extra(b)['candidate'])
 
-    def test_independent_support_missing_and_uncertain_excluded(self):
+    def test_optional_support_and_uncertain_excluded(self):
         z, delta, cloth, arms = fixture(); z[:, 46:49] = 0.
         args = (z, delta, cloth, arms)
         for r in evaluate(*args, supply=False):
-            self.assertEqual(extra(r)['status'], 'independent_foreground_required')
+            self.assertTrue(extra(r)['candidate'])
         for r in evaluate(*args, missing_mask=np.zeros_like(cloth)):
             self.assertFalse(extra(r)['candidate'])
         strip = np.zeros_like(cloth); strip[:, 46:49] = True
@@ -145,23 +145,98 @@ class ObliqueGapTests(unittest.TestCase):
         self.assertFalse(extra(g)['candidate'])
 
     def test_depth_mismatch_weak_and_wholly_invalid_support(self):
-        for kind in ('mismatch', 'not_lifted', 'no_measured_anchor', 'wholly_invalid'):
+        for kind in ('not_lifted', 'no_measured_anchor', 'wholly_invalid'):
             z, delta, cloth, arms = fixture()
             z[:, 46:49] = 0
-            options = {}
-            if kind == 'mismatch':
-                z[22:30, 49:78] -= .055
-            elif kind == 'not_lifted':
+            if kind == 'not_lifted':
                 delta[:, 49:] = 0.
             elif kind == 'no_measured_anchor':
                 z[:22, 68:78] = 0.
             else:
                 z[cloth | arms] = 0.
-            g, b = evaluate(z, delta, cloth, arms, **options)
+            g, b = evaluate(z, delta, cloth, arms)
             if kind != 'no_measured_anchor':
                 self.assertFalse(extra(g)['candidate'])
             if kind != 'not_lifted':
                 self.assertFalse(extra(b)['candidate'])
+
+    def test_no_mask_and_large_fold_step_with_per_side_slope(self):
+        z, delta, cloth, arms = fixture()
+        yy, xx = np.indices(z.shape)
+        # Two real surfaces, not an interpolable depth ramp across the missing band.
+        z[cloth | arms] += (.003*xx+.002*yy+.25*(xx >= 47))[cloth | arms]
+        for y, x, width in zip(range(22,30), [46,46,47,47,46,45,45,46], [2,2,3,2,2,3,2,2]):
+            z[y,x:x+width] = np.nan
+        base = evaluate(z, delta, cloth, arms, gap_px=0, supply=False)
+        coupled = evaluate(z, delta, cloth, arms, supply=False)
+        for before, after in zip(base,coupled):
+            self.assertTrue(extra(after)['candidate'])
+            self.assertGreater(extra(after)['median_cross_gap_depth_step_m'], .25)
+            self.assertGreaterEqual(extra(after)['supporting_lines'], 3)
+            self.assertLessEqual(extra(after)['max_missing_run_px'], 3)
+            for name, original in before.diagnostics.items():
+                np.testing.assert_equal(after.diagnostics[name], original)
+            self.assertEqual({k:v for k,v in after.metrics.items() if k != 'invalid_depth_gap'}, before.metrics)
+        a, b = coupled
+        self.assertEqual(a.bilateral,'unknown')
+        self.assertEqual(b.bridge,'unknown')
+        self.assertEqual(extra(a)['candidate_sustained_width_px'],62)
+        self.assertTrue(np.isnan(z[22,46]))  # do not publish or mutate depth values
+        for r in evaluate(z, delta, cloth, arms, supply=False,
+                          options={'invalid_gap_depth_jump_m':.02}):
+            self.assertFalse(extra(r)['candidate'])  # optional explicit old cap
+
+    def test_incoherent_outward_and_neighbor_line_flanks_rejected(self):
+        for kind in ('outward','across_lines'):
+            z, delta, cloth, arms = fixture()
+            z[:,46:49] = 0.
+            if kind == 'outward':
+                z[22:30,44] += .03
+            else:
+                z[22:30:2,16:46] += .03
+            for r in evaluate(z, delta, cloth, arms, supply=False):
+                self.assertFalse(extra(r)['candidate'])
+
+    def test_no_object_reference_and_asymmetric_flanks(self):
+        z, delta, cloth, arms = fixture()
+        z[:,46:49] = 0.
+        g = ObjectOnlyGraspDetector(invalid_gap_max_px=3).detect(
+            z, cloth, depth_unit='m', diagnostics=True)
+        self.assertEqual(g.held,'unknown')
+        self.assertFalse(extra(g)['candidate'])
+        # The right attachment is present but the two cloth flanks are
+        # vertically misaligned, with only two common scanlines.
+        cloth[22:28,49:68] = False
+        cloth[30:36,49:78] = True
+        z = np.where(cloth | arms,.95,1.5)
+        z[:,46:49] = 0.
+        delta = np.where(cloth | arms,.05,0.)
+        for r in evaluate(z,delta,cloth,arms,supply=False):
+            self.assertFalse(extra(r)['candidate'])
+
+    def test_straight_close_grippers_missing_air_do_not_form_bridge(self):
+        silhouette = np.zeros((64,96),bool)
+        silhouette[:35,16:26] = True
+        silhouette[:35,28:38] = True
+        z = np.where(silhouette,.95,1.5)
+        z[11:35,26:28] = 0.
+        r = TopEntryBridgeDetector(invalid_gap_max_px=3).detect_mask(
+            z, silhouette, depth_unit='m', diagnostics=True)
+        self.assertEqual(r.bridge,'unknown')
+        self.assertFalse(extra(r)['candidate'])
+
+    def test_identical_invalid_gap_cannot_distinguish_fold_from_separate_pieces(self):
+        z, delta, cloth, arms = fixture()
+        z[:,46:49] = 0.
+        disjoint_cloth = cloth & (z > 0)
+        # Distinct underlying descriptions but identical measurements and masks.
+        folded = evaluate(z,delta,cloth,arms,supply=False)
+        separated = evaluate(z,delta,disjoint_cloth,arms,supply=False)
+        for a,b in zip(folded,separated):
+            self.assertEqual(extra(a),extra(b))
+            self.assertTrue(extra(a)['candidate'])
+        self.assertEqual(separated[0].bilateral,'unknown')
+        self.assertEqual(separated[1].bridge,'unknown')
 
     def test_no_multifragment_chain_or_unsupported_gripper_connector(self):
         z, delta, cloth, arms = fixture()

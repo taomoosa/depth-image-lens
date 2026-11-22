@@ -102,7 +102,7 @@ returned arrays, not files. `to_dict()` omits them for concise JSON.
 Run `python examples/example_top_entry_bridge.py` for a synthetic usage example.
 Synthetic tests verify behavior, not real-camera accuracy.
 
-For an optional hypothesis specific to narrow invalid-depth stripes with
-independent cloth evidence, see [missing-depth stripes](OBLIQUE_GAPS.md).
+For an optional hypothesis specific to narrow invalid-depth stripes and
+locally coherent measured flanks, see [missing-depth stripes](OBLIQUE_GAPS.md).
 This is separate from the default geometric candidate and never turns the
 result into an observed bridge.

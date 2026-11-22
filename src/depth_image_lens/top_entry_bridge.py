@@ -48,7 +48,7 @@ def _spanning(parts, shape, seeds, min_area):
     return result
 
 
-def _gap_bridge(depth, parts, seeds, missing, support, thresholds, options):
+def _gap_bridge(depth, parts, seeds, missing, support, central, thresholds, options):
     """Test one missing-depth crossing, keeping both attachment seeds measured."""
     radius = thresholds['min_path_width_px'] // 2
     min_side = max(thresholds['min_path_width_px']**2, thresholds['min_area']//2)
@@ -65,24 +65,49 @@ def _gap_bridge(depth, parts, seeds, missing, support, thresholds, options):
     best = None
     for proposal in gap_proposals(
             depth, labels, missing, support, max_px=options['invalid_gap_max_px'],
-            depth_jump_m=min(thresholds['depth_jump_m'], options['invalid_gap_depth_jump_m']),
+            flank_depth_jump_m=min(thresholds['depth_jump_m'], options['invalid_gap_flank_depth_jump_m']),
+            cross_depth_jump_m=options['invalid_gap_depth_jump_m'],
             min_lines=max(thresholds['min_path_width_px'], options['invalid_gap_min_lines'])):
         a, b = proposal.ids
         if attachments[a] == attachments[b] or sizes[a]+sizes[b] < thresholds['min_area']:
             continue
-        inferred, scratch = proposal.build(depth)
+        inferred = proposal.inferred_mask(depth.shape)
         inferred_px = int(inferred.sum())
         if inferred_px > (sizes[a]+sizes[b]) / 3:
             continue
-        joined = (labels == a) | (labels == b) | inferred
+        measured = (labels == a) | (labels == b)
+        joined = measured | inferred
         thick = _erode(joined, radius)
-        thick_parts, _, _ = _graph_components(thick, scratch, thresholds['depth_jump_m'])
-        core = _spanning(thick_parts, depth.shape, seeds, 1)
-        if not (core & inferred).any():
+        # Keep each anchor reachable via measured depths from its original
+        # fragment. Add a link only where a supported run also crosses the
+        # geometric width core; never invent intermediate depth or bypass a
+        # measured edge that failed continuity.
+        thick_parts, _, _ = _graph_components(thick & measured, depth, thresholds['depth_jump_m'])
+        reach = [np.zeros(depth.shape, bool), np.zeros(depth.shape, bool)]
+        for points in thick_parts:
+            ys, xs = points.T
+            for i, label in enumerate((a, b)):
+                if labels[ys[0], xs[0]] == label and seeds[attachments[label].index(True)][ys, xs].any():
+                    reach[i][ys, xs] = True
+        crossing = np.zeros(depth.shape, bool)
+        core_grid, left, right, gap = (thick, *reach, crossing)
+        if proposal.axis == 'y':
+            core_grid, left, right, gap = (v.T for v in (core_grid, left, right, gap))
+        for row, lo, hi in proposal.runs:
+            # Just two straight grippers either side of a narrow invalid air
+            # gap are not inter-entry support. An x crossing must start/end on
+            # measured inward extensions, not merely on the top projections.
+            inward_extension = (proposal.axis == 'y'
+                                or (central[row, lo-1] and central[row, hi]))
+            if (inward_extension and left[row, lo-1] and right[row, hi]
+                    and core_grid[row, lo:hi].all()):
+                gap[row, lo:hi] = True
+        if not crossing.any() or not ((reach[0] | reach[1]) & central).any():
             continue
+        core = crossing | reach[0] | reach[1]
         rank = (int(core.sum()), -inferred_px)
         if best is None or rank > best[0]:
-            best = rank, sorted(proposal.ids), proposal.axis, inferred, joined, core
+            best = rank, proposal, inferred, joined, core
     return best
 
 
@@ -99,7 +124,8 @@ class TopEntryBridgeDetector:
                  min_entry_row_fraction=.6, min_entry_gap_px=2,
                  min_path_width_px=3, min_bridge_drop_px=3, min_area=20,
                  gap_radius_px=1, depth_jump_m=.05, invalid_gap_max_px=0,
-                 invalid_gap_depth_jump_m=.02, invalid_gap_min_lines=3):
+                 invalid_gap_depth_jump_m=None, invalid_gap_min_lines=3,
+                 invalid_gap_flank_depth_jump_m=.02):
         positive = dict(entry_band_height_px=entry_band_height_px,
                         min_entry_width_px=min_entry_width_px,
                         min_entry_gap_px=min_entry_gap_px,
@@ -120,8 +146,8 @@ class TopEntryBridgeDetector:
         if (not np.isfinite([min_entry_row_fraction, depth_jump_m]).all()
                 or not 0 < min_entry_row_fraction <= 1 or depth_jump_m <= 0):
             raise ValueError('finite positive depth jump and row fraction in (0, 1] required')
-        self._gap_options = validate_gap_options(invalid_gap_max_px, invalid_gap_depth_jump_m,
-                                                 invalid_gap_min_lines)
+        self._gap_options = validate_gap_options(invalid_gap_max_px, invalid_gap_flank_depth_jump_m,
+                                                 invalid_gap_min_lines, invalid_gap_depth_jump_m)
         self.thresholds = {**positive, 'min_entry_row_fraction': float(min_entry_row_fraction),
                            'min_bridge_drop_px': min_bridge_drop_px,
                            'gap_radius_px': gap_radius_px, 'depth_jump_m': float(depth_jump_m)}
@@ -136,8 +162,8 @@ class TopEntryBridgeDetector:
         mask_complete=True explicitly attests that false mask pixels mean absence.
         Even then no is withheld for missing depth, weak paths and cropped paths.
         Input row zero is the top entry boundary; rotating/cropping is caller work.
-        Optional invalid-depth evidence requires an independent, object-only
-        gap_support_mask; it never adds top entries or changes bridge.
+        Optional invalid-depth hypotheses use measured flanks and never add
+        top entries or change bridge. gap_support_mask can restrict the search.
         """
         if depth_unit not in ('m', 'mm'):
             raise ValueError('explicit m or mm depth_unit required')
@@ -184,8 +210,7 @@ class TopEntryBridgeDetector:
         thresholds = dict(t)
         if self._gap_options['invalid_gap_max_px']:
             thresholds.update(self._gap_options)
-            metrics['invalid_depth_gap'] = result_detail(
-                'independent_foreground_required' if gap_support is None else 'no_supported_candidate')
+            metrics['invalid_depth_gap'] = result_detail('no_supported_candidate')
 
         def finish(value, candidate, reason):
             return TopEntryBridgeResult(value, bool(candidate), [reason], entries,
@@ -238,16 +263,17 @@ class TopEntryBridgeDetector:
             if self._gap_options['invalid_gap_max_px']:
                 metrics['invalid_depth_gap']['status'] = 'already_observed_bridge'
             return finish('yes', True, 'wide_observed_depth_continuous_path_between_top_entries')
-        if self._gap_options['invalid_gap_max_px'] and gap_support is not None:
+        if self._gap_options['invalid_gap_max_px']:
             # No inferred top entry, grip-contact connector or width inside the
             # entry band. A distinct, measured route must reach each seed.
             missing = ~sensor_valid & observed & ~uncertain & domain & (yy >= band+t['min_bridge_drop_px'])
-            extra = _gap_bridge(z, parts, seeds, missing, gap_support, t, self._gap_options)
+            extra = _gap_bridge(z, parts, seeds, missing, gap_support, center_gap, t, self._gap_options)
             if extra is not None:
-                rank, ids, axis, inferred, joined, inferred_core = extra
+                rank, proposal, inferred, joined, inferred_core = extra
                 metrics['invalid_depth_gap'].update(
                     status='candidate', candidate=True, inferred_gap_pixels=-rank[1],
-                    candidate_core_pixels=rank[0], measured_fragment_ids=ids, gap_direction=axis)
+                    candidate_core_pixels=rank[0], measured_fragment_ids=sorted(proposal.ids),
+                    gap_direction=proposal.axis, **proposal.crossing_summary(z))
                 if diagnostics:
                     debug.update(invalid_depth_gap_inferred_mask=inferred,
                                  invalid_depth_gap_candidate_mask=joined,

@@ -1,20 +1,32 @@
-"""Bounded, independently supported missing-depth hypotheses, never observations."""
+"""Bounded missing-depth links between two independently coherent measured flanks."""
 from dataclasses import dataclass
 
 import numpy as np
 
 
-def validate_gap_options(max_px, depth_jump_m, min_lines):
+def validate_gap_options(max_px, flank_depth_jump_m, min_lines, cross_depth_jump_m):
     if type(max_px) is not int or not 0 <= max_px <= 8:
         raise ValueError('invalid_gap_max_px must be an integer in 0..8')
     if type(min_lines) is not int or not 2 <= min_lines <= 128:
         raise ValueError('invalid_gap_min_lines must be an integer in 2..128')
-    if (isinstance(depth_jump_m, (bool, np.bool_)) or not np.isscalar(depth_jump_m)
-            or not isinstance(depth_jump_m, (int, float, np.integer, np.floating))
-            or not np.isfinite(depth_jump_m) or depth_jump_m <= 0):
-        raise ValueError('invalid_gap_depth_jump_m must be finite and positive')
+
+    def checked(value, name):
+        if (isinstance(value, (bool, np.bool_))
+                or not isinstance(value, (int, float, np.integer, np.floating))
+                or not np.isfinite(value) or value <= 0):
+            raise ValueError(name + ' must be finite and positive')
+        return float(value)
+
     return dict(invalid_gap_max_px=max_px, invalid_gap_min_lines=min_lines,
-                invalid_gap_depth_jump_m=float(depth_jump_m))
+                invalid_gap_flank_depth_jump_m=checked(flank_depth_jump_m, 'invalid_gap_flank_depth_jump_m'),
+                invalid_gap_depth_jump_m=(None if cross_depth_jump_m is None else
+                                          checked(cross_depth_jump_m, 'invalid_gap_depth_jump_m')))
+
+
+def _depth_edge(a, b, limit):
+    tol = 4*np.finfo(float).eps*np.maximum(np.maximum(np.abs(a), np.abs(b)), limit)
+    with np.errstate(invalid='ignore', over='ignore'):
+        return np.abs(a-b) <= limit+tol
 
 
 @dataclass(frozen=True)
@@ -23,58 +35,87 @@ class _Proposal:
     axis: str
     runs: tuple  # orthogonal line, first missing coordinate, exclusive end
 
-    def build(self, depth):
-        """Local scratch depths for graph continuity only, never returned."""
-        inferred = np.zeros(depth.shape, bool)
-        scratch = depth.copy()
-        add, values = (inferred, scratch) if self.axis == 'x' else (inferred.T, scratch.T)
+    def inferred_mask(self, shape):
+        inferred = np.zeros(shape, bool)
+        add = inferred if self.axis == 'x' else inferred.T
         for row, lo, hi in self.runs:
             add[row, lo:hi] = True
-            values[row, lo:hi] = np.linspace(values[row, lo-1], values[row, hi], hi-lo+2)[1:-1]
-        return inferred, scratch
+        return inferred
+
+    def crossing_summary(self, depth):
+        z = depth if self.axis == 'x' else depth.T
+        differences = [abs(float(z[row, lo-1])-float(z[row, hi])) for row, lo, hi in self.runs]
+        return dict(supporting_lines=len(self.runs),
+                    median_cross_gap_depth_step_m=float(np.median(differences)),
+                    max_missing_run_px=max(hi-lo for _,lo,hi in self.runs))
 
 
-def gap_proposals(depth, labels, missing, support, *, max_px, depth_jump_m, min_lines):
-    """Find same-pair, adjacent parallel gap runs between measured fragments.
+def _aligned_flanks(z, prev, next_run, limit):
+    # Track the same flank on adjacent scanlines. Compare only nearby measured
+    # locations, never the left and right endpoints of a missing span.
+    py, pl, ph = prev
+    ny, nl, nh = next_run
+    if abs(pl-nl) > 3 or abs(ph-nh) > 3:
+        return False
+    left = min(pl, nl)-1
+    right = max(ph, nh)
+    # If the user zigzags by 3px, compare neighboring pixels at the support
+    # edge rather than sampling beyond each guaranteed 3-pixel flank.
+    lx0, lx1 = max(left,pl-3), max(left,nl-3)
+    rx0, rx1 = min(right,ph+2), min(right,nh+2)
+    return (_depth_edge(z[py,lx0], z[ny,lx1], limit)
+            and _depth_edge(z[py,rx0], z[ny,rx1], limit))
 
-    Only real missing depths in the caller's allowed domain can be traversed.
-    Both flanks must also be covered by the independent object support; each
-    proposal links exactly two measured labels, with no multi-fragment chains.
-    Diagonal cuts can shift across adjacent lines; only horizontal/vertical
-    traversals are used.
+
+def gap_proposals(depth, labels, missing, support, *, max_px, flank_depth_jump_m,
+                  min_lines, cross_depth_jump_m=None):
+    """Find same-pair tracks of nearby parallel runs through real missing Z.
+
+    Each flank must contain three measured pixels of its own original
+    component. Depth must be locally coherent within each flank, but a step
+    between flanks is allowed unless the caller sets the old optional cap.
+    Optional silhouette support restricts candidates; it never supplies Z.
     """
-    if not np.any(missing & support):
+    if not np.any(missing if support is None else missing & support):
         return
     for axis, z, ids, valid_gap, fg in (
             ('x', depth, labels, missing, support),
-            ('y', depth.T, labels.T, missing.T, support.T)):
-        if z.shape[1] < 3:
+            ('y', depth.T, labels.T, missing.T, None if support is None else support.T)):
+        if z.shape[1] < 7:
             continue
-        allowed = valid_gap & fg
-        # No fill at frame edges; the last/first rows may be clipped.
+        allowed = valid_gap.copy() if fg is None else valid_gap & fg
+        # No fill at frame edges; the last/first lines may be clipped.
         allowed[[0, -1], :] = False
-        measured = (ids > 0) & fg
+        measured = ids > 0
+        if fg is not None:
+            measured &= fg  # The immediate measured endpoints lie in the allowed silhouette.
         buckets = {}
-        for span in range(1, min(max_px, z.shape[1]-2) + 1):
+        for span in range(1, min(max_px, z.shape[1]-6) + 1):
             n = z.shape[1] - span - 1
             left, right = ids[:, :n], ids[:, span+1:]
             flanks = measured[:, :n] & measured[:, span+1:] & (left != right)
             for offset in range(1, span+1):
                 flanks &= allowed[:, offset:offset+n]
             rows, starts = np.nonzero(flanks)
+            bounded = (starts >= 2) & (starts+span+3 < z.shape[1])
+            rows, starts = rows[bounded], starts[bounded]
             if not len(rows):
                 continue
-            za, zb = z[rows, starts], z[rows, starts+span+1]
-            tol = 4*np.finfo(float).eps*np.maximum(np.maximum(np.abs(za), np.abs(zb)), depth_jump_m)
-            compatible = np.abs(za-zb) <= depth_jump_m+tol
-            for row, start in zip(rows[compatible], starts[compatible]):
-                a, b = int(left[row, start]), int(right[row, start])
-                key = (a, b)
+            ends = starts+span+1
+            a, b = ids[rows,starts], ids[rows,ends]
+            compatible = np.ones(len(rows), bool)
+            for k in (1, 2):
+                compatible &= (ids[rows,starts-k] == a) & (ids[rows,ends+k] == b)
+                compatible &= _depth_edge(z[rows,starts-k], z[rows,starts-k+1], flank_depth_jump_m)
+                compatible &= _depth_edge(z[rows,ends+k], z[rows,ends+k-1], flank_depth_jump_m)
+            if cross_depth_jump_m is not None:
+                compatible &= _depth_edge(z[rows,starts], z[rows,ends], cross_depth_jump_m)
+            for row, start, aa, bb in zip(rows[compatible], starts[compatible], a[compatible], b[compatible]):
+                key = (int(aa),int(bb))
                 buckets.setdefault(key, []).append((int(row), int(start)+1, int(start)+span+1))
         for pair, runs in sorted(buckets.items()):
-            # A line can contain distinct missing runs across winding lobes.
-            # Build 8-connected tracks of runs, rather than concatenating
-            # different gaps that happen to share a component pair.
+            # Gaps must touch on adjacent lines; two independent breaks
+            # cannot be concatenated merely because they share component IDs.
             tracks = []
             active, current, used = {}, {}, set()
             last_row = -2
@@ -83,16 +124,17 @@ def gap_proposals(depth, labels, missing, support, *, max_px, depth_jump_m, min_
                     active, current = (current if row == last_row+1 else {}), {}
                     used = set()
                     last_row = row
-                # Endpoints are included here solely to let gaps that shift
-                # one pixel per row (diagonal cuts) touch across adjacent rows.
+                item = (row, lo, hi)
+                # Inclusive endpoint indices let adjacent slanted gaps touch.
                 neighbors = {i for x in range(lo, hi+1) for i in active.get(x, ())}
-                choices = neighbors - used
+                choices = [i for i in sorted(neighbors-used)
+                           if _aligned_flanks(z, tracks[i][-1], item, flank_depth_jump_m)]
                 if choices:
-                    idx = min(choices)
-                    tracks[idx].append((row, lo, hi))
+                    idx = choices[0]
+                    tracks[idx].append(item)
                 else:
                     idx = len(tracks)
-                    tracks.append([(row, lo, hi)])
+                    tracks.append([item])
                 used.add(idx)
                 for x in range(lo, hi+1):
                     current.setdefault(x, []).append(idx)
@@ -103,4 +145,4 @@ def gap_proposals(depth, labels, missing, support, *, max_px, depth_jump_m, min_
 
 def result_detail(status, **data):
     return dict(status=status, candidate=False, inferred_gap_pixels=0,
-                scope='independent_foreground_supported_missing_depth_hypothesis', **data)
+                scope='locally_coherent_flank_missing_depth_hypothesis', **data)
