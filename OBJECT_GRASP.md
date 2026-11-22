@@ -153,4 +153,7 @@ If invalid depth splits one silhouette into two measured fragments, see
 [missing-depth stripe hypotheses](OBLIQUE_GAPS.md). The optional candidate does
 not change the observed width or the ordinary held/bilateral outputs.
 The opt-in result can also return completed component masks separately from
-measured depth and decisions.
+measured depth and decisions. `completed_components` includes the legacy
+measured keys, including `eligible` and `failure_reasons`, as well as separate
+measured/inferred counts and source IDs. See the guide for merged-row width and
+observation-region semantics.

@@ -35,6 +35,9 @@ def main():
         if completion is None:
             continue
         print(name, 'completion:', completion.to_dict())
+        if name == 'Object-only':
+            print('Eligible completed component IDs:',
+                  [c['id'] for c in result.completed_components if c['eligible']])
         if completion.merged_component_id is not None:
             # Use the per-component mask instead of re-labeling the binary
             # union when touching depth-discontinuous fragments must stay separate.

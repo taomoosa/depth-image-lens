@@ -111,6 +111,74 @@ class ObliqueCompletionTests(unittest.TestCase):
                 self.assertEqual(c['measured_pixels'],c['pixels'])
                 self.assertTrue(r.completion.component_mask(c['id']).any())
 
+    def test_object_records_match_legacy_schema_for_unmerged_noneligible_components(self):
+        z, delta, cloth, arms = fixture()
+        z[:,46:49] = 1.5
+        cloth[:,46:49] = False
+        # A small elevated object is a measured component, but not eligible.
+        cloth[42:44,68:71] = True
+        z[42:44,68:71] = .95
+        delta[42:44,68:71] = .05
+        grasp, top = run(z, delta, cloth, arms)
+        self.assertEqual(grasp.completion.status, 'measured_only')
+        sources = {c['id']:c for c in grasp.metrics['components']}
+        self.assertTrue(any(not c['eligible'] for c in sources.values()))
+        for row in grasp.completed_components:
+            current = sources[row['id']]
+            self.assertEqual({k:row[k] for k in current}, current)
+            self.assertIsNot(row['failure_reasons'],current['failure_reasons'])
+            self.assertIsNot(row['bbox_xyxy'],current['bbox_xyxy'])
+        self.assertTrue(all('eligible' not in row for row in top.completed_components))
+        exported=grasp.to_dict()['completion']['completed_components']
+        for row in exported:
+            current = sources[row['id']]
+            self.assertEqual({k:row[k] for k in current}, current)
+        json.dumps(grasp.to_dict(), allow_nan=False)
+
+    def test_merged_compatibility_fields_are_measured_and_common_region_is_counted_once(self):
+        cloth = np.zeros((40,50),bool)
+        left = [12,12,3,12,12,3,12,12]
+        right = [12,3,12,3,12,12,3,12]
+        for row, a, b in zip(range(16,24),left,right):
+            cloth[row,20-a:22+b] = True
+        z=np.where(cloth,.95,1.5)
+        z[16:24,20:22] = 0.
+        delta=np.where(cloth,.05,0.)
+        detector = ObjectOnlyGraspDetector(min_width_px=10, min_width_rows=3, invalid_gap_max_px=2)
+        baseline = ObjectOnlyGraspDetector(min_width_px=10,min_width_rows=3)
+        for cut_mask in (False,True):
+            with self.subTest(cut_mask=cut_mask):
+                offered = cloth & (z > 0) if cut_mask else cloth
+                r = detector.detect(z,offered,difference=delta,depth_unit='m')
+                old = baseline.detect(z,offered,difference=delta,depth_unit='m')
+                self.assertEqual(r.bilateral,'unknown')
+                self.assertEqual(old.metrics,{k:v for k,v in r.metrics.items() if k != 'invalid_depth_gap'})
+                self.assertEqual(r.completion.status,'merged')
+                part, = r.completed_components
+                measured = r.metrics['components']
+                self.assertTrue(set(measured[0]) <= set(part))
+                self.assertEqual(part['pixels'], int(r.completed_mask.sum()))
+                self.assertEqual(part['measured_pixels'],sum(c['pixels'] for c in measured))
+                self.assertEqual(part['inferred_pixels'],16)
+                self.assertTrue(part['eligible'])
+                self.assertEqual(part['failure_reasons'],[])
+                self.assertEqual(part['max_contiguous_row_width_px'],12)
+                self.assertEqual(part['sustained_width_px'],3)
+                # Left and right each qualify on some of the same eight rows.
+                self.assertEqual(part['qualifying_width_rows'],8)
+                self.assertGreater(sum(c['qualifying_width_rows'] for c in measured),8)
+                self.assertGreater(r.metrics['invalid_depth_gap']['candidate_sustained_width_px'],12)
+                if cut_mask:
+                    self.assertIsNone(part['observation_region_id'])
+                    self.assertIsNone(part['region_valid_fraction'])
+                    self.assertIsNone(part['region_lift_fraction'])
+                else:
+                    region, = r.metrics['observation_regions']
+                    self.assertEqual(part['observation_region_id'],region['id'])
+                    self.assertAlmostEqual(part['region_valid_fraction'],region['valid_fraction'])
+                    self.assertEqual(part['region_lift_fraction'],1.)
+                json.dumps(r.to_dict(), allow_nan=False)
+
     def test_unavailable_and_disabled_outputs_are_not_fabricated(self):
         z, delta, cloth, arms = fixture()
         for r in run(z,delta,cloth,arms,gap=0):

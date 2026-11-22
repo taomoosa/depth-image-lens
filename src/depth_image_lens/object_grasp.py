@@ -1,4 +1,5 @@
 """Object-only static support inference under an explicit suspension rule."""
+from copy import deepcopy
 from dataclasses import dataclass, field
 import numpy as np
 from .debug import DebugResultMixin
@@ -59,6 +60,35 @@ def _gap_bilateral(depth, labels, missing, support, eligible, thresholds, option
         if best is None or item[:2] > best[:2]:
             best = item
     return best
+
+
+def _inherit_measured_component_metrics(completion, components, qualifying_rows, observation_regions):
+    """Add legacy component fields without interpreting inferred pixels as depth."""
+    by_id = {c['id']: c for c in components}
+    regions = {r['id']: r for r in observation_regions}
+    for row in completion.completed_components:
+        ids = row['source_component_ids']
+        members = [by_id[i] for i in ids]
+        if len(members) == 1:
+            # Geometry equals the original component; keep either value and
+            # independently copy list-valued measured metadata.
+            for name, value in members[0].items():
+                if name not in row:
+                    row[name] = deepcopy(value)
+            continue
+        region_ids = {c['observation_region_id'] for c in members}
+        region = regions[next(iter(region_ids))] if len(region_ids) == 1 else None
+        row.update(
+            observation_region_id=None if region is None else region['id'],
+            region_valid_fraction=None if region is None else region['valid_fraction'],
+            region_lift_fraction=(None if region is None else
+                                  row['measured_pixels']/max(region['valid_pixels'], 1)),
+            eligible=all(c['eligible'] for c in members),
+            failure_reasons=sorted({reason for c in members for reason in c['failure_reasons']}),
+            sustained_width_px=max(c['sustained_width_px'] for c in members),
+            max_contiguous_row_width_px=max(c['max_contiguous_row_width_px'] for c in members),
+            qualifying_width_rows=len(set().union(*(qualifying_rows[i] for i in ids))),
+        )
 
 
 @dataclass(frozen=True)
@@ -178,6 +208,7 @@ class ObjectOnlyGraspDetector:
         lifted = selected & (evidence - t['reference_error_m'] >= t['min_lift_m'])
         # Local four-neighbor continuity, no morphology, hole filling or component union.
         remaining = lifted.copy(); components = []; labels = np.zeros(z.shape, np.int32)
+        qualifying_rows = {} if self._gap_options['invalid_gap_max_px'] else None
         for y, x in zip(*np.nonzero(lifted)):
             if not remaining[y, x]:
                 continue
@@ -209,13 +240,20 @@ class ObjectOnlyGraspDetector:
             if local_fraction < t['min_lift_fraction']: failures.append('region_lift_fraction_low')
             if region['valid_fraction'] < t['min_valid_fraction']: failures.append('region_reference_coverage_low')
             ys,xs=zip(*points)
-            components.append(dict(id=len(components)+1, pixels=len(points),
+            component_id = len(components)+1
+            if qualifying_rows is None:
+                qualifying_count = sum(v >= t['min_width_px'] for v in runs.values())
+            else:
+                qualifying = {row for row, run in runs.items() if run >= t['min_width_px']}
+                qualifying_rows[component_id] = qualifying
+                qualifying_count = len(qualifying)
+            components.append(dict(id=component_id, pixels=len(points),
                 bbox_xyxy=[min(xs),min(ys),max(xs)+1,max(ys)+1],
                 span_x_px=max(xs)-min(xs)+1,span_y_px=max(ys)-min(ys)+1,
                 observation_region_id=region['id'], region_valid_fraction=region['valid_fraction'],
                 region_lift_fraction=local_fraction, eligible=not failures, failure_reasons=failures,
                 sustained_width_px=width, max_contiguous_row_width_px=max(runs.values()),
-                qualifying_width_rows=sum(v >= t['min_width_px'] for v in runs.values())))
+                qualifying_width_rows=qualifying_count))
         count = int(obj.sum()); count_valid = int(selected.sum())
         coverage = count_valid/max(count, 1); fraction = int(lifted.sum())/max(count_valid, 1)
         eligible = [c for c in components if c['eligible']]
@@ -296,6 +334,8 @@ class ObjectOnlyGraspDetector:
             completion = complete_components(
                 labels, scope='elevated_object_depth_components',
                 ids=() if proposal is None else proposal.ids, inferred=gap_inferred)
+            _inherit_measured_component_metrics(completion, components, qualifying_rows,
+                                                observation_regions)
         bilateral_reason = ('sufficient_same_component_visible_width' if bilateral == 'bilateral'
                             else 'insufficient_visible_width_not_unilateral' if held == 'held'
                             else 'elevated_support_not_established')

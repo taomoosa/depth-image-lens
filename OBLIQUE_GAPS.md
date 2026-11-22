@@ -153,6 +153,35 @@ if grasp.completion is not None and grasp.completion.merged_component_id is not 
 - `to_dict()` includes the completion status and component records when
   available, but does not serialize the aligned mask or label arrays.
 
+### Object-only records and legacy fields
+
+Object-only completed rows include every field of
+`result.metrics["components"]` plus completion provenance. Unmerged rows
+retain the original measured values, including `eligible` and
+`failure_reasons`, so existing filters can use them on completed geometry.
+The measured rows under `metrics["components"]` themselves do not change.
+Top-entry retains its geometry-only completion schema.
+
+For a merged object-only row, `pixels` and geometry describe the completed
+mask; `measured_pixels` and `inferred_pixels` indicate the split. `eligible`
+is true only if both source measurements were eligible. `failure_reasons`
+is their union (the current accepted pair has no failures). This is not a
+new eligibility or grasp decision based on inferred pixels.
+
+- `sustained_width_px` and `max_contiguous_row_width_px` are the largest
+  measured source values, not measurements across the missing stripe.
+  `qualifying_width_rows` counts the distinct rows that already qualified
+  within either measured source, with no duplicates and no newly filled
+  rows. It does not imply a consecutive window across separate sources.
+  For a candidate width across the stripe, use the explicitly hypothetical
+  `metrics["invalid_depth_gap"]["candidate_sustained_width_px"]`.
+- If both sources are from one observation region, `observation_region_id`
+  and `region_valid_fraction` stay the same, and `region_lift_fraction`
+  counts both sources' measured elevated pixels once over that region's
+  valid pixel count. If the sources are from different regions, all three
+  fields are `None`; use `source_component_ids` to inspect their separate
+  measurements instead of indexing a region with the absent ID.
+
 Run `python examples/example_oblique_invalid_depth_gap.py` to compare the
 measured, candidate, and completed outputs on an artificial stripe. These
 synthetic checks are not a measured camera-accuracy guarantee.
